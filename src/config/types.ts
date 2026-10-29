@@ -23,6 +23,8 @@ export interface AppConfig {
   readonly ghidraLanguageOverride?: GhidraLanguageOverride;
   readonly ghidraDisabledAnalyzers?: readonly string[];
   readonly ghidraSeedFile?: string;
+  /** Endpoint record published by ReaGhidraBridge.java running in a CodeBrowser. */
+  readonly ghidraAttachEndpoint?: string;
   readonly ghidraNativeAotJar?: string;
   readonly ilspyCmdPath: string | undefined;
   readonly hopperLauncherPath: string;

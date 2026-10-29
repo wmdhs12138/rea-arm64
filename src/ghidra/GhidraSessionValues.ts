@@ -5,26 +5,59 @@ import { z } from "zod";
 import type { JsonValue } from "../domain/jsonValue.js";
 import { err, ok, type Result } from "../domain/result.js";
 import {
+  GHIDRA_ATTACHED_CURSOR_OPERATIONS,
   GHIDRA_INVENTORY_OPERATIONS,
   GHIDRA_INVENTORY_MUTATIONS,
+  type GhidraInventoryOperation,
 } from "./GhidraInventoryValues.js";
-import { GHIDRA_FUNCTION_OPERATIONS } from "./GhidraFunctionValues.js";
+import {
+  GHIDRA_FUNCTION_OPERATIONS,
+  type GhidraFunctionOperation,
+} from "./GhidraFunctionValues.js";
 import { ghidraExtensionResultSchema } from "./extensions/GhidraExtensions.js";
 import { GHIDRA_MIPS_SOFT_FLOAT_STORAGE } from "./GhidraMipsProfile.js";
 
-/** Exact methods proved by the bridge handshake after auto-analysis. */
-export const GHIDRA_SESSION_CAPABILITIES = [
+const BRIDGE_METHODS = [
   "ping",
   "shutdown",
   ...GHIDRA_INVENTORY_OPERATIONS,
   ...GHIDRA_FUNCTION_OPERATIONS,
 ] as const;
 
+const cursorOperations: ReadonlySet<string> = new Set(
+  GHIDRA_ATTACHED_CURSOR_OPERATIONS,
+);
+
+/** Exact methods proved by the headless bridge handshake after auto-analysis. */
+export const GHIDRA_SESSION_CAPABILITIES: readonly string[] = Object.freeze(
+  BRIDGE_METHODS.filter((method) => !cursorOperations.has(method)),
+);
+
 /** Methods that edit the session database; read-only bridges omit them. */
 export const GHIDRA_MUTATING_OPERATIONS: ReadonlySet<string> = new Set([
   "annotate_native_function",
   ...GHIDRA_INVENTORY_MUTATIONS,
 ]);
+
+/**
+ * Operations served from a user-launched CodeBrowser: reads and cursor
+ * navigation over the analyst's Program, never edits or import attestation.
+ */
+export const GHIDRA_ATTACHED_OPERATIONS: readonly (
+  | GhidraInventoryOperation
+  | GhidraFunctionOperation
+)[] = Object.freeze(
+  [...GHIDRA_INVENTORY_OPERATIONS, ...GHIDRA_FUNCTION_OPERATIONS].filter(
+    (operation) =>
+      !GHIDRA_MUTATING_OPERATIONS.has(operation) &&
+      operation !== "inspect_native_load_image",
+  ),
+);
+
+const attachedSessionCapabilities: readonly string[] = [
+  "ping",
+  ...GHIDRA_ATTACHED_OPERATIONS,
+];
 
 // Shared wire budget: Java bounds the aggregate before serializing the handshake.
 const PDB_ATTRIBUTE_UTF16_BUDGET = 4096;
@@ -33,7 +66,60 @@ const pdbAttributeSchema = z
   .max(PDB_ATTRIBUTE_UTF16_BUDGET)
   .nullable();
 
-const capabilitySchema = z.enum(GHIDRA_SESSION_CAPABILITIES);
+const capabilitySchema = z.enum(BRIDGE_METHODS);
+
+/** A handshake serves exactly the expected methods, without duplicates. */
+const servesExactly = (
+  observed: readonly string[],
+  expected: readonly string[],
+): boolean => {
+  const methods = new Set(observed);
+  return (
+    methods.size === observed.length &&
+    methods.size === expected.length &&
+    expected.every((method) => methods.has(method))
+  );
+};
+
+/** Program Information attributes; absent load state remains unknown. */
+const pdbSchema = z
+  .strictObject({
+    file: pdbAttributeSchema,
+    guid: pdbAttributeSchema,
+    /** Ghidra stores CodeView age as a hexadecimal string. */
+    age: pdbAttributeSchema,
+    signature: pdbAttributeSchema,
+    version: pdbAttributeSchema,
+    loaded: z.boolean().nullable(),
+    resource_limit: z
+      .strictObject({
+        utf16_budget: z.literal(PDB_ATTRIBUTE_UTF16_BUDGET),
+        omitted_attributes: z
+          .array(z.enum(["file", "guid", "age", "signature", "version"]))
+          .min(1)
+          .max(5),
+      })
+      .optional(),
+  })
+  .refine(
+    (pdb) =>
+      [pdb.file, pdb.guid, pdb.age, pdb.signature, pdb.version].reduce<number>(
+        (sum, value) => sum + (value?.length ?? 0),
+        0,
+      ) <= PDB_ATTRIBUTE_UTF16_BUDGET,
+    "PDB attributes exceed the aggregate wire budget",
+  );
+
+const targetSchema = z
+  .object({
+    name: z.string().min(1),
+    language_id: z.string().min(1),
+    compiler_spec_id: z.string().min(1),
+    image_base: z.string().regex(/^0x[0-9a-f]+$/u),
+    default_address_space: z.string().min(1),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  })
+  .strict();
 
 const sessionInfoSchema = z
   .object({
@@ -49,39 +135,7 @@ const sessionInfoSchema = z
     read_only: z.boolean(),
     analysis_complete: z.boolean(),
     analysis_timed_out: z.boolean(),
-    /** Program Information attributes; absent load state remains unknown. */
-    pdb: z
-      .strictObject({
-        file: pdbAttributeSchema,
-        guid: pdbAttributeSchema,
-        /** Ghidra stores CodeView age as a hexadecimal string. */
-        age: pdbAttributeSchema,
-        signature: pdbAttributeSchema,
-        version: pdbAttributeSchema,
-        loaded: z.boolean().nullable(),
-        resource_limit: z
-          .strictObject({
-            utf16_budget: z.literal(PDB_ATTRIBUTE_UTF16_BUDGET),
-            omitted_attributes: z
-              .array(z.enum(["file", "guid", "age", "signature", "version"]))
-              .min(1)
-              .max(5),
-          })
-          .optional(),
-      })
-      .refine(
-        (pdb) =>
-          [
-            pdb.file,
-            pdb.guid,
-            pdb.age,
-            pdb.signature,
-            pdb.version,
-          ].reduce<number>((sum, value) => sum + (value?.length ?? 0), 0) <=
-          PDB_ATTRIBUTE_UTF16_BUDGET,
-        "PDB attributes exceed the aggregate wire budget",
-      )
-      .optional(),
+    pdb: pdbSchema.optional(),
     analysis_extensions: z.array(ghidraExtensionResultSchema).optional(),
     analysis_seeds: ghidraSeedReportSchema.optional(),
     disabled_analyzers: ghidraDisabledAnalyzerReportSchema.optional(),
@@ -94,21 +148,55 @@ const sessionInfoSchema = z
       .strict()
       .optional(),
     capabilities: z.array(capabilitySchema),
-    target: z
-      .object({
-        name: z.string().min(1),
-        language_id: z.string().min(1),
-        compiler_spec_id: z.string().min(1),
-        image_base: z.string().regex(/^0x[0-9a-f]+$/u),
-        default_address_space: z.string().min(1),
-        sha256: z.string().regex(/^[a-f0-9]{64}$/u),
-      })
-      .strict(),
+    target: targetSchema,
   })
   .strict();
 
 /** Authenticated metadata produced after Ghidra finishes auto-analysis. */
 export type GhidraSessionInfo = z.infer<typeof sessionInfoSchema>;
+
+const attachedSessionInfoSchema = z.strictObject({
+  name: z.literal("REA Ghidra bridge"),
+  mode: z.literal("attached"),
+  run_id: z.string().uuid(),
+  provider: z.strictObject({
+    id: z.literal("ghidra"),
+    version: z.string().min(1),
+  }),
+  read_only: z.literal(true),
+  /** CodeBrowser analysis state; REA serves only analyzed, idle Programs. */
+  analysis: z.strictObject({ analyzed: z.boolean(), active: z.boolean() }),
+  capabilities: z.array(capabilitySchema),
+  target: targetSchema.extend({ project_path: z.string().min(1) }).strict(),
+  pdb: pdbSchema,
+});
+
+/** Authenticated identity of the Program served from a CodeBrowser. */
+export type GhidraAttachedSessionInfo = z.infer<
+  typeof attachedSessionInfoSchema
+>;
+
+/** Require the published run, the opened target, and the read-only surface. */
+export const parseGhidraAttachedSessionInfo = (
+  value: JsonValue,
+  expected: { readonly runId: string; readonly targetSha256: string },
+): Result<GhidraAttachedSessionInfo, Error> => {
+  const parsed = attachedSessionInfoSchema.safeParse(value);
+  if (!parsed.success)
+    return err(new Error("Ghidra attached handshake is invalid"));
+  if (
+    parsed.data.run_id !== expected.runId ||
+    !servesExactly(parsed.data.capabilities, attachedSessionCapabilities)
+  )
+    return err(new Error("Ghidra attached handshake identity is invalid"));
+  if (parsed.data.target.sha256 !== expected.targetSha256)
+    return err(
+      new Error(
+        `The CodeBrowser Program ${parsed.data.target.name} has SHA-256 ${parsed.data.target.sha256}, not the opened target's ${expected.targetSha256}; open the original target file in that CodeBrowser`,
+      ),
+    );
+  return ok(parsed.data);
+};
 
 /** Describe missing PDB authority without claiming all names are generated. */
 export const ghidraPdbLimitations = (
@@ -168,7 +256,7 @@ export const parseGhidraSessionInfo = (
     !parsed.success ||
     parsed.data.run_id !== expected.runId ||
     parsed.data.read_only !== readOnly ||
-    parsed.data.capabilities.length !== expectedCapabilities.length ||
+    !servesExactly(parsed.data.capabilities, expectedCapabilities) ||
     parsed.data.provider.version !== expected.providerVersion ||
     parsed.data.profile_digest !== expected.profileDigest ||
     parsed.data.target.sha256 !== expected.targetSha256 ||
@@ -177,10 +265,6 @@ export const parseGhidraSessionInfo = (
     (expected.expectedCompilerSpecId !== undefined &&
       parsed.data.target.compiler_spec_id !==
         expected.expectedCompilerSpecId) ||
-    new Set(parsed.data.capabilities).size !== expectedCapabilities.length ||
-    expectedCapabilities.some(
-      (capability) => !parsed.data.capabilities.includes(capability),
-    ) ||
     parsed.data.analysis_complete === parsed.data.analysis_timed_out
   )
     return err(new Error("Ghidra bridge handshake identity is invalid"));

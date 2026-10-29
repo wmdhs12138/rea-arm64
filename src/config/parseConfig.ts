@@ -135,6 +135,9 @@ export const parseConfig = (
     ...(env.REA_GHIDRA_SEED_FILE === undefined
       ? {}
       : { ghidraSeedFile: env.REA_GHIDRA_SEED_FILE }),
+    ...(env.REA_GHIDRA_ATTACH_ENDPOINT === undefined
+      ? {}
+      : { ghidraAttachEndpoint: env.REA_GHIDRA_ATTACH_ENDPOINT }),
     ...(env.REA_GHIDRA_DISABLED_ANALYZERS === undefined
       ? {}
       : { ghidraDisabledAnalyzers: env.REA_GHIDRA_DISABLED_ANALYZERS }),

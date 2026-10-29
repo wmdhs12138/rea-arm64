@@ -1,4 +1,7 @@
-// REA's packaged Ghidra headless bridge; metadata edits are session-local.
+// REA's packaged Ghidra bridge. Headless runs serve an ephemeral import whose
+// metadata edits are session-local. Run it from the CodeBrowser Script Manager
+// to serve that Program to REA attached mode: read-only analysis plus cursor
+// navigation; cancel the task to stop serving.
 // @category REA
 
 import java.io.BufferedReader;
@@ -13,23 +16,32 @@ import java.net.SocketTimeoutException;
 import java.net.StandardProtocolFamily;
 import java.net.UnixDomainSocketAddress;
 import java.nio.channels.Channels;
+import java.nio.channels.ClosedChannelException;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.channels.OverlappingFileLockException;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFileAttributes;
+import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -40,6 +52,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.UUID;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
@@ -52,6 +65,9 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 import ghidra.app.util.headless.HeadlessScript;
+import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
+import ghidra.app.services.CodeViewerService;
+import ghidra.app.services.GoToService;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileOptions;
 import ghidra.app.decompiler.DecompileResults;
@@ -80,6 +96,7 @@ import ghidra.program.model.listing.CommentType;
 import ghidra.program.model.listing.Bookmark;
 import ghidra.program.model.listing.BookmarkManager;
 import ghidra.program.model.listing.BookmarkType;
+import ghidra.program.model.listing.CodeUnit;
 import ghidra.program.model.listing.Data;
 import ghidra.program.model.listing.DataIterator;
 import ghidra.program.model.listing.Function;
@@ -88,6 +105,7 @@ import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Variable;
+import ghidra.program.model.mem.Memory;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.mem.MemoryBlockSourceInfo;
 import ghidra.program.database.mem.FileBytes;
@@ -115,8 +133,12 @@ import ghidra.program.model.pcode.PcodeBlockBasic;
 import ghidra.program.model.pcode.Varnode;
 import ghidra.program.model.pcode.VarnodeAST;
 import ghidra.program.util.ContextEvaluatorAdapter;
+import ghidra.program.util.GhidraProgramUtilities;
+import ghidra.program.util.ProgramLocation;
 import ghidra.program.util.SymbolicPropogator;
 import ghidra.program.util.VarnodeContext;
+import ghidra.util.Swing;
+import ghidra.util.task.CancelledListener;
 
 public final class ReaGhidraBridge extends HeadlessScript {
     // At most 24 KiB after worst-case JSON escaping (six bytes per UTF-16 unit).
@@ -187,8 +209,27 @@ public final class ReaGhidraBridge extends HeadlessScript {
         "inspect_native_data_type",
         "resolve_native_call_targets",
         "procedure_references",
-        "xrefs"
+        "xrefs",
+        "next_address",
+        "prev_address"
     };
+    /** Cursor-state methods served only from a CodeBrowser. */
+    private static final String[] ATTACHED_CURSOR_CAPABILITIES = {
+        "current_address",
+        "current_procedure",
+        "goto_address"
+    };
+    // Attached mode serves the analyst's persistent Program, so REA neither
+    // edits it, stops the GUI task, nor attests a REA-owned import.
+    private static final Set<String> ATTACHED_EXCLUDED_CAPABILITIES =
+        Set.of("shutdown", "inspect_native_load_image");
+    private static final String ATTACHED_ENDPOINT_SCHEMA = "rea-ghidra-attach-v1";
+
+    /** True when serving the Program open in a CodeBrowser instead of a headless import. */
+    private boolean attached;
+    /** Program modification number observed by attached inventories and decompiler state. */
+    private long observedModification = -1;
+    private volatile SocketChannel attachedClient;
 
     private List<InventoryItem> nameInventory;
     private List<FunctionEntry> procedureInventory;
@@ -203,6 +244,10 @@ public final class ReaGhidraBridge extends HeadlessScript {
 
     @Override
     public void run() throws Exception {
+        if (!isRunningHeadless()) {
+            runAttached();
+            return;
+        }
         String[] arguments = getScriptArgs();
         if (arguments.length != 1) {
             throw new IllegalArgumentException("REA bridge requires one session descriptor");
@@ -330,6 +375,192 @@ public final class ReaGhidraBridge extends HeadlessScript {
         }
     }
 
+    /**
+     * Serve the CodeBrowser's Program until the Script Manager task is
+     * cancelled or the Program closes. REA never edits, saves, or closes it.
+     */
+    private void runAttached() throws Exception {
+        if (isWindowsHost())
+            throw new IllegalStateException("REA attached mode requires a Linux or macOS host");
+        if (state.getTool() == null || currentProgram == null)
+            throw new IllegalStateException("Open the target Program in a CodeBrowser before running the REA bridge");
+        String sha256 = currentProgram.getExecutableSHA256();
+        if (sha256 == null || !sha256.matches("[0-9a-fA-F]{64}"))
+            throw new IllegalStateException("The Program records no executable SHA-256; import the original file in Ghidra");
+        // Commit the script's empty outer transaction so the analyst's edits and
+        // undo history stay independent of this long-running task.
+        end(true);
+        attached = true;
+        admittedTargetSha256 = sha256.toLowerCase(Locale.ROOT);
+        sessionDefaultAddressSpace = currentProgram.getAddressFactory().getDefaultAddressSpace();
+        Path directory = attachedEndpointDirectory();
+        try (FileChannel lockChannel = FileChannel.open(
+                 directory.resolve("bridge.lock"),
+                 Set.of(StandardOpenOption.CREATE, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS),
+                 PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")))) {
+            FileLock lock;
+            try {
+                lock = lockChannel.tryLock();
+            }
+            catch (OverlappingFileLockException held) {
+                lock = null;
+            }
+            if (lock == null)
+                throw new IllegalStateException(
+                    "Another REA attached bridge is serving " + directory + "; cancel it before starting this one");
+            byte[] token = new byte[32];
+            new SecureRandom().nextBytes(token);
+            SessionDescriptor descriptor = new SessionDescriptor(
+                "unix-socket",
+                directory.resolve("bridge.sock").toString(),
+                bytesHex(token),
+                UUID.randomUUID().toString(),
+                admittedTargetSha256,
+                Application.getApplicationVersion(),
+                null,
+                new JsonArray(),
+                0
+            );
+            initializeDecompiler();
+            try {
+                serveAttached(descriptor, directory.resolve("endpoint.json"));
+            }
+            finally {
+                decompiler.dispose();
+                decompiler = null;
+            }
+        }
+    }
+
+    private void serveAttached(SessionDescriptor descriptor, Path endpointPath) throws Exception {
+        Path socketPath = Path.of(descriptor.endpointPath);
+        Path pendingPath = endpointPath.resolveSibling(endpointPath.getFileName() + ".pending");
+        // The held lock proves these are residue from an earlier bridge.
+        Files.deleteIfExists(socketPath);
+        Files.deleteIfExists(pendingPath);
+        Files.deleteIfExists(endpointPath);
+        try (ServerSocketChannel server = ServerSocketChannel.open(StandardProtocolFamily.UNIX)) {
+            try {
+                server.bind(UnixDomainSocketAddress.of(socketPath));
+            }
+            catch (java.net.SocketException rejected) {
+                throw new IllegalStateException(
+                    "Cannot listen on " + socketPath + " (" + rejected.getMessage() +
+                        "); set REA_GHIDRA_ATTACH_DIR to a shorter private absolute directory",
+                    rejected);
+            }
+            Files.setPosixFilePermissions(socketPath, PosixFilePermissions.fromString("rw-------"));
+            JsonObject endpoint = new JsonObject();
+            endpoint.addProperty("schema", ATTACHED_ENDPOINT_SCHEMA);
+            endpoint.addProperty("transport", descriptor.transport);
+            endpoint.addProperty("socket_path", descriptor.endpointPath);
+            endpoint.addProperty("token", descriptor.token);
+            endpoint.addProperty("run_id", descriptor.runId);
+            Files.createFile(pendingPath,
+                PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
+            Files.writeString(pendingPath, GSON.toJson(endpoint) + "\n", StandardCharsets.UTF_8,
+                StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING);
+            Files.move(pendingPath, endpointPath, StandardCopyOption.ATOMIC_MOVE);
+            CancelledListener stop = () -> {
+                closeQuietly(server);
+                closeQuietly(attachedClient);
+            };
+            ghidra.framework.model.DomainObjectClosedListener closed = program -> stop.cancelled();
+            monitor.addCancelledListener(stop);
+            currentProgram.addCloseListener(closed);
+            println("REA attached bridge serving " + currentProgram.getName() +
+                " (SHA-256 " + admittedTargetSha256 + ").");
+            println("Set REA_GHIDRA_ATTACH_ENDPOINT=" + endpointPath +
+                " for REA. Cancel this task to stop serving.");
+            try {
+                while (!monitor.isCancelled() && !currentProgram.isClosed()) {
+                    SocketChannel client = acceptAttachedClient(server);
+                    if (client == null) return;
+                    attachedClient = client;
+                    try (client;
+                         BufferedReader reader = new BufferedReader(
+                             Channels.newReader(client, StandardCharsets.UTF_8));
+                         BufferedWriter writer = new BufferedWriter(
+                             Channels.newWriter(client, StandardCharsets.UTF_8))) {
+                        // A cancellation between accept and publication closed only the server.
+                        if (!monitor.isCancelled()) serveClient(descriptor, reader, writer, null);
+                    }
+                    catch (IOException disconnected) {
+                        // One REA connection ended; the Program remains served.
+                    }
+                    finally {
+                        attachedClient = null;
+                    }
+                }
+            }
+            finally {
+                currentProgram.removeCloseListener(closed);
+                monitor.removeCancelledListener(stop);
+            }
+        }
+        finally {
+            Files.deleteIfExists(pendingPath);
+            Files.deleteIfExists(endpointPath);
+            Files.deleteIfExists(socketPath);
+        }
+    }
+
+    private static SocketChannel acceptAttachedClient(ServerSocketChannel server) throws IOException {
+        try {
+            return server.accept();
+        }
+        catch (ClosedChannelException stopped) {
+            return null;
+        }
+    }
+
+    private static void closeQuietly(java.io.Closeable resource) {
+        if (resource == null) return;
+        try {
+            resource.close();
+        }
+        catch (IOException ignored) {
+            // Stopping is best-effort; the blocked accept or read observes the close.
+        }
+    }
+
+    /** Resolve the private per-user directory shared with REA_GHIDRA_ATTACH_ENDPOINT. */
+    private static Path attachedEndpointDirectory() throws IOException {
+        String configured = System.getenv("REA_GHIDRA_ATTACH_DIR");
+        Path directory;
+        if (configured != null && !configured.isEmpty()) {
+            directory = Path.of(configured);
+            if (!directory.isAbsolute())
+                throw new IllegalStateException("REA_GHIDRA_ATTACH_DIR must be an absolute path");
+        }
+        else {
+            String runtime = System.getenv("XDG_RUNTIME_DIR");
+            Path parent = runtime != null && !runtime.isEmpty() && Path.of(runtime).isAbsolute()
+                ? Path.of(runtime)
+                : Path.of(System.getProperty("java.io.tmpdir"));
+            directory = parent.resolve("rea-ghidra-attach-" + System.getProperty("user.name"));
+        }
+        Set<PosixFilePermission> privateDirectory = EnumSet.of(
+            PosixFilePermission.OWNER_READ,
+            PosixFilePermission.OWNER_WRITE,
+            PosixFilePermission.OWNER_EXECUTE
+        );
+        try {
+            Files.createDirectory(directory, PosixFilePermissions.asFileAttribute(privateDirectory));
+        }
+        catch (FileAlreadyExistsException existing) {
+            // Validated below: links and directories of other owners are refused.
+        }
+        PosixFileAttributes attributes =
+            Files.readAttributes(directory, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        if (!attributes.isDirectory() ||
+            !attributes.owner().getName().equals(System.getProperty("user.name")) ||
+            !attributes.permissions().equals(privateDirectory))
+            throw new IllegalStateException(
+                "REA attach directory must be a private (0700) directory owned by the current user: " + directory);
+        return directory;
+    }
+
     private static boolean isWindowsHost() {
         return System.getProperty("os.name", "").startsWith("Windows");
     }
@@ -412,7 +643,7 @@ public final class ReaGhidraBridge extends HeadlessScript {
                 }
             }
             try {
-                if (request.method.equals("shutdown")) {
+                if (!attached && request.method.equals("shutdown")) {
                     requireKeys(request.params, Set.of());
                     JsonObject result = new JsonObject();
                     result.addProperty("shutdown", true);
@@ -444,15 +675,26 @@ public final class ReaGhidraBridge extends HeadlessScript {
             requireKeys(request.params, Set.of());
             return sessionInfo(descriptor);
         }
-        if (analysisTimeoutOccurred()) {
-            throw new RequestFailure(
-                "analysis_incomplete",
-                "Ghidra auto-analysis did not complete for this Program"
-            );
-        }
+        requireServableProgram();
         if (MUTATING_CAPABILITIES.contains(request.method) && !descriptor.transport.equals("unix-socket"))
             throw new RequestFailure("method_unavailable", "Windows P0 does not admit database mutation");
+        if (attached && !Arrays.asList(servedCapabilities(descriptor)).contains(request.method))
+            throw new RequestFailure(
+                "method_unavailable",
+                "REA attached mode serves the CodeBrowser Program read-only; this method is unavailable"
+            );
+        if (!attached && Arrays.asList(ATTACHED_CURSOR_CAPABILITIES).contains(request.method))
+            throw new RequestFailure("method_unavailable", "Headless Ghidra has no CodeBrowser cursor");
         return switch (request.method) {
+            case "current_address" -> {
+                requireKeys(request.params, Set.of("document"));
+                requireDocument(request.params);
+                yield GSON.toJsonTree(canonicalAddress(attachedCursor().getAddress()));
+            }
+            case "current_procedure" -> currentProcedure(request.params);
+            case "goto_address" -> gotoAddress(request.params);
+            case "next_address", "prev_address" ->
+                adjacentAddress(request.params, request.method.equals("next_address"));
             case "current_document" -> {
                 requireKeys(request.params, Set.of());
                 yield GSON.toJsonTree(currentProgram.getName());
@@ -510,7 +752,8 @@ public final class ReaGhidraBridge extends HeadlessScript {
     }
 
     private JsonObject sessionInfo(SessionDescriptor descriptor) throws Exception {
-        boolean timedOut = analysisTimeoutOccurred();
+        if (attached && currentProgram.isClosed())
+            throw new RequestFailure("target_unavailable", "The attached CodeBrowser Program was closed");
         JsonObject provider = new JsonObject();
         provider.addProperty("id", "ghidra");
         provider.addProperty("version", Application.getApplicationVersion());
@@ -531,18 +774,30 @@ public final class ReaGhidraBridge extends HeadlessScript {
 
         JsonObject result = new JsonObject();
         result.addProperty("name", "REA Ghidra bridge");
+        if (attached) {
+            target.addProperty("project_path", currentProgram.getDomainFile().getPathname());
+            JsonObject analysis = new JsonObject();
+            analysis.addProperty("analyzed", GhidraProgramUtilities.isAnalyzed(currentProgram));
+            analysis.addProperty(
+                "active", AutoAnalysisManager.getAnalysisManager(currentProgram).isAnalyzing());
+            result.addProperty("mode", "attached");
+            result.addProperty("run_id", descriptor.runId);
+            result.add("provider", provider);
+            result.addProperty("read_only", true);
+            result.add("analysis", analysis);
+            result.add("capabilities", GSON.toJsonTree(servedCapabilities(descriptor)));
+            result.add("target", target);
+            result.add("pdb", pdbObservation());
+            return result;
+        }
+        boolean timedOut = analysisTimeoutOccurred();
         result.addProperty("run_id", descriptor.runId);
         result.addProperty("profile_digest", descriptor.profileDigest);
         result.add("provider", provider);
-        boolean readOnly = !descriptor.transport.equals("unix-socket");
-        result.addProperty("read_only", readOnly);
+        result.addProperty("read_only", !descriptor.transport.equals("unix-socket"));
         result.addProperty("analysis_complete", !timedOut);
         result.addProperty("analysis_timed_out", timedOut);
-        result.add("capabilities", GSON.toJsonTree(
-            java.util.Arrays.stream(CAPABILITIES)
-                .filter(value -> !readOnly || !MUTATING_CAPABILITIES.contains(value))
-                .toArray(String[]::new)
-        ));
+        result.add("capabilities", GSON.toJsonTree(servedCapabilities(descriptor)));
         result.add("target", target);
         result.add("pdb", pdbObservation());
         JsonArray extensions = analysisExtensions.reports();
@@ -563,6 +818,148 @@ public final class ReaGhidraBridge extends HeadlessScript {
             .getString("REA MIPS soft-float storage", null);
         if (softFloat != null) result.add("mips_soft_float_storage", JsonParser.parseString(softFloat));
         return result;
+    }
+
+    private String[] servedCapabilities(SessionDescriptor descriptor) {
+        if (!attached) {
+            boolean readOnly = !descriptor.transport.equals("unix-socket");
+            return Arrays.stream(CAPABILITIES)
+                .filter(value -> !readOnly || !MUTATING_CAPABILITIES.contains(value))
+                .toArray(String[]::new);
+        }
+        List<String> served = new ArrayList<>();
+        for (String value : CAPABILITIES) {
+            if (!MUTATING_CAPABILITIES.contains(value) && !ATTACHED_EXCLUDED_CAPABILITIES.contains(value))
+                served.add(value);
+        }
+        served.addAll(Arrays.asList(ATTACHED_CURSOR_CAPABILITIES));
+        return served.toArray(String[]::new);
+    }
+
+    /** Refuse partial analysis; attached reads also drop caches after GUI edits. */
+    private void requireServableProgram() throws Exception {
+        if (!attached) {
+            if (analysisTimeoutOccurred())
+                throw new RequestFailure(
+                    "analysis_incomplete",
+                    "Ghidra auto-analysis did not complete for this Program"
+                );
+            return;
+        }
+        if (currentProgram.isClosed())
+            throw new RequestFailure("target_unavailable", "The attached CodeBrowser Program was closed");
+        if (!GhidraProgramUtilities.isAnalyzed(currentProgram))
+            throw new RequestFailure(
+                "analysis_incomplete",
+                "The attached Program has not been auto-analyzed; run Analysis > Auto Analyze in the CodeBrowser"
+            );
+        if (AutoAnalysisManager.getAnalysisManager(currentProgram).isAnalyzing())
+            throw new RequestFailure(
+                "analysis_incomplete",
+                "Ghidra auto-analysis is still running in the CodeBrowser; retry after it finishes"
+            );
+        long modification = currentProgram.getModificationNumber();
+        if (modification != observedModification) {
+            invalidateAnalysisCaches();
+            observedModification = modification;
+        }
+    }
+
+    /** Read the primary Listing cursor on the Swing thread. */
+    private ProgramLocation attachedCursor() {
+        CodeViewerService viewer = state.getTool().getService(CodeViewerService.class);
+        if (viewer == null)
+            throw new RequestFailure("method_unavailable", "The attached Ghidra tool has no Listing");
+        ProgramLocation location = Swing.runNow(viewer::getCurrentLocation);
+        if (location == null || location.getAddress() == null)
+            throw new RequestFailure("invalid_request", "The CodeBrowser Listing has no cursor location");
+        if (location.getProgram() != currentProgram)
+            throw new RequestFailure(
+                "invalid_request",
+                "The CodeBrowser cursor is in Program " + location.getProgram().getName() +
+                    ", not the REA-attached Program " + currentProgram.getName() +
+                    "; select its tab or call goto_address"
+            );
+        return location;
+    }
+
+    private JsonElement currentProcedure(JsonObject params) {
+        requireKeys(params, Set.of("document"));
+        requireDocument(params);
+        Address cursor = attachedCursor().getAddress();
+        Function function = currentProgram.getFunctionManager().getFunctionAt(cursor);
+        if (function == null && cursor.isMemoryAddress())
+            function = currentProgram.getFunctionManager().getFunctionContaining(cursor);
+        if (function == null)
+            throw new RequestFailure(
+                "not_found", "No procedure contains the CodeBrowser cursor at " + canonicalAddress(cursor));
+        return GSON.toJsonTree(procedureName(function));
+    }
+
+    /** Move the cursor to the containing code unit and require exact readback. */
+    private JsonElement gotoAddress(JsonObject params) {
+        requireKeys(params, Set.of("document", "address"));
+        requireDocument(params);
+        Address expected = containingCodeUnit(requireAddress(params, "address")).getMinAddress();
+        GoToService service = state.getTool().getService(GoToService.class);
+        if (service == null)
+            throw new RequestFailure("method_unavailable", "The attached Ghidra tool has no GoToService");
+        boolean moved = Swing.runNow(() -> service.goTo(expected, currentProgram));
+        // A separate Swing turn observes events the navigation queued.
+        Address observed = attachedCursor().getAddress();
+        if (!moved || !observed.equals(expected))
+            throw new RequestFailure(
+                "invalid_request",
+                "CodeBrowser cursor did not reach " + canonicalAddress(expected) +
+                    "; observed " + canonicalAddress(observed)
+            );
+        return GSON.toJsonTree(canonicalAddress(observed));
+    }
+
+    /** Adjacent Listing code units in mapped memory; navigation, not control flow. */
+    private JsonElement adjacentAddress(JsonObject params, boolean next) {
+        requireKeys(params, Set.of("document", "address"));
+        requireDocument(params);
+        JsonElement selected = params.get("address");
+        Address target;
+        if (!selected.isJsonNull()) {
+            target = requireAddress(params, "address");
+        }
+        else if (attached) {
+            target = attachedCursor().getAddress();
+        }
+        else {
+            throw new RequestFailure("invalid_request", "Headless Ghidra has no CodeBrowser cursor; pass an address");
+        }
+        Memory memory = currentProgram.getMemory();
+        Address result;
+        if (next) {
+            result = containingCodeUnit(target).getMaxAddress().next();
+        }
+        else {
+            Address previous = target.isMemoryAddress() && memory.contains(target) ? target.previous() : null;
+            if (previous == null || !memory.contains(previous))
+                throw new RequestFailure(
+                    "invalid_request", "No mapped address precedes " + canonicalAddress(target));
+            result = containingCodeUnit(previous).getMinAddress();
+        }
+        if (result == null || !memory.contains(result))
+            throw new RequestFailure(
+                "invalid_request",
+                "No adjacent Listing code unit exists in mapped memory after " + canonicalAddress(target)
+            );
+        return GSON.toJsonTree(canonicalAddress(result));
+    }
+
+    private CodeUnit containingCodeUnit(Address address) {
+        if (!address.isMemoryAddress() || !currentProgram.getMemory().contains(address))
+            throw new RequestFailure(
+                "invalid_request", "Address is outside every Ghidra memory block: " + canonicalAddress(address));
+        CodeUnit unit = currentProgram.getListing().getCodeUnitContaining(address);
+        if (unit == null)
+            throw new RequestFailure(
+                "invalid_request", "No Listing code unit contains " + canonicalAddress(address));
+        return unit;
     }
 
     /** Read loader/analyzer-owned facts without searching for or applying companions. */

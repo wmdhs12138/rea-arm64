@@ -43,6 +43,8 @@ jobs:
             src/application/binaryDiagnostics/BinaryLayoutService.test.ts \
             src/ghidra/GhidraInventoryValues.test.ts \
             src/ghidra/GhidraSessionValues.test.ts \
+            src/ghidra/GhidraAttachedClient.test.ts \
+            src/ghidra/GhidraAttachedProvider.test.ts \
             tests/boundary/filesystem/typescriptCompiler.test.ts \
             tests/boundary/binaryDiagnostics/pwntoolsLayoutProvider.test.ts \
             tests/boundary/binaryDiagnostics/pwntoolsInputBoundAdmission.test.ts \

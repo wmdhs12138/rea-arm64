@@ -49,6 +49,8 @@ public final class ReaGhidraMipsSoftFloat extends GhidraScript {
 
   @Override
   public void run() throws Exception {
+    // Import step only; Script Manager runs would edit an analyst's Program.
+    if (!isRunningHeadless()) throw new IllegalStateException("REA headless import step");
     String processor = currentProgram.getLanguage().getProcessor().toString();
     if (!processor.equals("MIPS") || currentProgram.getDefaultPointerSize() != 4)
       throw new IllegalStateException(

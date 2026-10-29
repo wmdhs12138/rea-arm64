@@ -7,6 +7,8 @@ import java.math.BigInteger;
 public final class ReaGhidraPrepareCom extends GhidraScript {
     @Override
     public void run() throws Exception {
+        // Import step only; Script Manager runs would edit an analyst's Program.
+        if (!isRunningHeadless()) throw new IllegalStateException("REA headless import step");
         if (!currentProgram.getLanguageID().getIdAsString().equals("x86:LE:16:Real Mode") ||
             !currentProgram.getExecutableFormat().equals("Raw Binary")) {
             throw new IllegalArgumentException("DOS COM preparation requires raw x86 real-mode import");

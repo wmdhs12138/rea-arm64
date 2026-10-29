@@ -131,7 +131,8 @@ export type GhidraProviderClientFactory = (
 
 type GhidraProviderClientInstance = ReturnType<GhidraProviderClientFactory>;
 
-interface GhidraExecutionMetadata {
+/** Evidence metadata a parsed Ghidra result may contribute to its execution. */
+export interface GhidraExecutionMetadata {
   readonly cachePolicy?: "live";
   readonly rawResult?: JsonValue;
   readonly limitations?: readonly string[];
@@ -919,23 +920,25 @@ const projectSessionError = (
       ).bindCleanupDependencies([primary, failure.cleanupFailure]);
 };
 
-const projectPrimarySessionError = (
+/** Evidence context retained by every projected Ghidra session failure. */
+export const ghidraFailureContext = (failure: GhidraSessionError) => ({
+  cause: failure,
+  diagnostics: failure.diagnostics,
+  ...(failure.partialObservation === undefined
+    ? {}
+    : { partialObservation: failure.partialObservation }),
+});
+
+/**
+ * Project request failures whose meaning does not depend on who owns the
+ * Ghidra session; lifecycle and decompiler continuations stay mode-specific.
+ */
+export const projectGhidraRequestFailure = (
   operation: AnalysisOperation,
   failure: GhidraSessionError,
-  limits: GhidraProjectionLimits,
-  health?: ProviderOperationHealth,
-): AnalysisError => {
-  const startupTimeoutMs = limits.ghidraStartupTimeoutMs;
-  const context = {
-    cause: failure,
-    diagnostics: failure.diagnostics,
-    ...(failure.partialObservation === undefined
-      ? {}
-      : { partialObservation: failure.partialObservation }),
-  };
-  const { cause: physicalCause, origin } = artifactFilePrimaryFacts(
-    failure.cause,
-  );
+): AnalysisError | undefined => {
+  const context = ghidraFailureContext(failure);
+  const { cause: physicalCause } = artifactFilePrimaryFacts(failure.cause);
   // A client-side ceiling refusal travels as the cause; re-attribute it to this
   // operation so callers see a typed resource constraint rather than a generic
   // session failure, matching how Hopper and Cutter report the same ceiling.
@@ -947,6 +950,38 @@ const projectPrimarySessionError = (
       physicalCause.reportedLimits,
       { ...context, ...resourceConstraintRecovery(physicalCause) },
     );
+  if (
+    failure.kind === "remote" &&
+    ["invalid_request", "not_found", "ambiguous"].includes(
+      failure.remoteCode ?? "",
+    )
+  )
+    return new AnalysisInputError(operation, context, [
+      { path: [], reason: "invalid_value", message: failure.message },
+    ]);
+  if (failure.kind === "remote" && failure.remoteCode === "method_unavailable")
+    return new AnalysisCapabilityUnavailableError(
+      "ghidra",
+      operation,
+      failure.message,
+      context,
+    );
+  return undefined;
+};
+
+const projectPrimarySessionError = (
+  operation: AnalysisOperation,
+  failure: GhidraSessionError,
+  limits: GhidraProjectionLimits,
+  health?: ProviderOperationHealth,
+): AnalysisError => {
+  const startupTimeoutMs = limits.ghidraStartupTimeoutMs;
+  const context = ghidraFailureContext(failure);
+  const { cause: physicalCause, origin } = artifactFilePrimaryFacts(
+    failure.cause,
+  );
+  const request = projectGhidraRequestFailure(operation, failure);
+  if (request !== undefined) return request;
   if (
     origin === "owned-or-classified" &&
     physicalCause instanceof AnalysisAccessDeniedError
@@ -1045,22 +1080,6 @@ const projectPrimarySessionError = (
         remediationAction:
           "Retry this search in literal mode or simplify the regex.",
       },
-    );
-  if (
-    failure.kind === "remote" &&
-    ["invalid_request", "not_found", "ambiguous"].includes(
-      failure.remoteCode ?? "",
-    )
-  )
-    return new AnalysisInputError(operation, context, [
-      { path: [], reason: "invalid_value", message: failure.message },
-    ]);
-  if (failure.kind === "remote" && failure.remoteCode === "method_unavailable")
-    return new AnalysisCapabilityUnavailableError(
-      "ghidra",
-      operation,
-      failure.message,
-      context,
     );
   const output =
     failure.kind === "start" ||

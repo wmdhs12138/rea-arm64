@@ -50,7 +50,10 @@ import {
   type GhidraInstallationInspection,
 } from "./GhidraInstallation.js";
 import { resolveGhidraAnalysisProfile } from "./GhidraAnalysisProfile.js";
-import { AnalysisCancelledError } from "../domain/analysisErrorCore.js";
+import {
+  AnalysisCancelledError,
+  AnalysisCapabilityUnavailableError,
+} from "../domain/analysisErrorCore.js";
 import { resolveGhidraAnalysisSeeds } from "./GhidraAnalysisSeeds.js";
 import {
   admitGhidraLanguageOverride,
@@ -63,11 +66,17 @@ import {
 } from "./GhidraPspProfile.js";
 import { resolveGhidraExtensions } from "./extensions/GhidraExtensions.js";
 import {
+  ATTACHED_CAPABILITIES,
   CAPABILITIES,
   windowsP0Capabilities,
   GHIDRA_PROVIDER_IDENTITY,
   WINDOWS_P0_NATIVE_PE_ARCHITECTURES,
 } from "./GhidraProviderCapabilities.js";
+import {
+  admitGhidraAttachedProfile,
+  createGhidraAttachedProviderClient,
+  ghidraAttachedProfile,
+} from "./GhidraAttachedProviderClient.js";
 import {
   createGhidraProviderClient,
   admitGhidraClient,
@@ -138,6 +147,8 @@ export class GhidraProvider implements AnalysisProviderCandidate {
   }
 
   capabilities(): readonly CapabilityDescriptor[] {
+    if (this.config.ghidraAttachEndpoint !== undefined)
+      return ATTACHED_CAPABILITIES;
     return (this.installationHost?.platform ?? process.platform) === "win32"
       ? windowsP0Capabilities()
       : CAPABILITIES;
@@ -162,6 +173,15 @@ export class GhidraProvider implements AnalysisProviderCandidate {
     signal: AbortSignal,
     scope?: ProviderInspectionScope,
   ): Promise<AnalysisProviderReadinessSnapshot> {
+    const attached = this.#attachedReadiness();
+    if (attached !== undefined) {
+      if (signal.aborted)
+        throw new AnalysisCancelledError("binary_session", {
+          cause: signal.reason,
+          diagnostics: attached.availability.diagnostics,
+        });
+      return attached;
+    }
     const installation = await this.#inspectInstallation(
       signal,
       "binary_session",
@@ -183,6 +203,31 @@ export class GhidraProvider implements AnalysisProviderCandidate {
         readiness === undefined
           ? CAPABILITIES
           : windowsP0Capabilities(readiness),
+    };
+  }
+
+  /** The user's CodeBrowser owns Ghidra in attached mode; nothing local is inspected. */
+  #attachedReadiness(): AnalysisProviderReadinessSnapshot | undefined {
+    const endpoint = this.config.ghidraAttachEndpoint;
+    if (endpoint === undefined) return undefined;
+    const platform = this.installationHost?.platform ?? process.platform;
+    const diagnostics = {
+      mode: "attached",
+      endpoint_path: endpoint,
+      host_platform: platform,
+    };
+    return {
+      availability:
+        platform === "win32"
+          ? {
+              status: "unavailable",
+              code: "unsupported_host",
+              reason:
+                "Ghidra attached mode requires a Linux or macOS host; Node path IPC on Windows cannot reach the bridge's AF_UNIX socket.",
+              diagnostics,
+            }
+          : { status: "available", code: null, reason: null, diagnostics },
+      capabilities: ATTACHED_CAPABILITIES,
     };
   }
 
@@ -243,6 +288,8 @@ export class GhidraProvider implements AnalysisProviderCandidate {
         reason: `Ghidra v1 imports executable targets, not ${target.kind} targets.`,
         diagnostics,
       };
+    if (this.config.ghidraAttachEndpoint !== undefined)
+      return inspectAttachedTargetSupport(target, diagnostics);
     if (hostPlatform === "win32")
       return inspectWindowsP0TargetSupport(target, diagnostics);
     const mipsReason =
@@ -376,7 +423,11 @@ export class GhidraProvider implements AnalysisProviderCandidate {
   async #resolveProfile(
     target: BinaryTarget,
     options?: AnalysisProfileResolutionOptions,
-  ) {
+  ): Promise<Result<AnalysisProfileResolution, AnalysisError>> {
+    if (this.config.ghidraAttachEndpoint !== undefined)
+      return ok({
+        profile: ghidraAttachedProfile(this.config.ghidraAttachEndpoint),
+      });
     const installation = await this.#inspectInstallation(
       options?.signal,
       "resolve_analysis_profile",
@@ -456,6 +507,27 @@ export class GhidraProvider implements AnalysisProviderCandidate {
     profile?: AnalysisProfileCommitment,
     context?: AnalysisClientContext,
   ): AnalysisClient {
+    const endpoint = this.config.ghidraAttachEndpoint;
+    if (endpoint !== undefined)
+      return new DeferredAnalysisClient(() => {
+        if (target.kind !== "executable")
+          throw new AnalysisCapabilityUnavailableError(
+            "ghidra",
+            "health",
+            `Ghidra attached mode serves executable Programs, not ${target.kind} targets.`,
+          );
+        const admitted = admitGhidraAttachedProfile(profile, endpoint);
+        if (!admitted.ok) throw admitted.error;
+        return Promise.resolve(
+          createGhidraAttachedProviderClient({
+            config: this.config,
+            endpointPath: endpoint,
+            target,
+            profile: admitted.value,
+            logger: this.logger,
+          }),
+        );
+      }, "ghidra");
     return new DeferredAnalysisClient(async (signal, resourceOwner) => {
       const admitted = admitGhidraClient(
         target,
@@ -611,6 +683,24 @@ export class GhidraProvider implements AnalysisProviderCandidate {
 
 const providerFailureText = (cause: unknown): string =>
   cause instanceof Error ? cause.message : String(cause);
+
+/** The CodeBrowser chose the import; REA can only bind its recorded digest. */
+const inspectAttachedTargetSupport = (
+  target: Extract<BinaryTarget, { readonly kind: "executable" }>,
+  observed: Readonly<Record<string, JsonValue>>,
+): ProviderTargetSupport => {
+  const diagnostics = { ...observed, mode: "attached" };
+  return isMachOFormat(target.format) &&
+    target.availableArchitectures.length > 1
+    ? {
+        status: "unsupported",
+        code: "architecture_unsupported",
+        reason:
+          "Every slice of a universal Mach-O shares the recorded file digest, so REA cannot verify which slice the CodeBrowser imported. Open a thinned slice in both Ghidra and REA.",
+        diagnostics,
+      }
+    : { status: "supported", code: null, reason: null, diagnostics };
+};
 
 const inspectWindowsP0TargetSupport = (
   target: BinaryTarget,

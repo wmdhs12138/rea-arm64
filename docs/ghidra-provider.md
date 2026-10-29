@@ -2,7 +2,8 @@
 
 REA imports one target into an ephemeral Ghidra database. Linux/macOS support
 read-only analysis and atomic function-name/entry-comment edits; Windows P0 is
-read-only. GUI controls and persistent database mutation are unavailable.
+read-only. Persistent database mutation is unavailable, and only
+[attached CodeBrowser mode](#attached-codebrowser-mode) moves a GUI cursor.
 Executable bytes remain unchanged.
 
 Use [installation](installation.md#ghidra) for supported hosts, prerequisites,
@@ -35,6 +36,55 @@ Provider selection and profile identity follow
 provider stays bound to the target; runtime failure never selects another
 provider automatically. The contracts below describe Ghidra observations,
 not equivalence with another engine's pseudocode or analysis database.
+
+## Attached CodeBrowser mode
+
+Set `REA_GHIDRA_ATTACH_ENDPOINT` to serve the Program open in a Ghidra
+CodeBrowser that you launched, instead of an ephemeral import. REA does not
+install or launch Ghidra in this mode and needs no local installation settings.
+
+1. Open the original target file in a CodeBrowser and let auto-analysis finish.
+2. In the Script Manager, add REA's `bridge/ghidra` directory and run
+   `ReaGhidraBridge.java`. The task serves until you cancel it or close the
+   Program.
+3. Set `REA_GHIDRA_ATTACH_ENDPOINT` to the endpoint path the script prints, then
+   open the same file in REA.
+
+The bridge publishes `endpoint.json` and a Unix socket in a private (0700)
+per-user directory: `REA_GHIDRA_ATTACH_DIR` from the Ghidra process
+environment, otherwise `$XDG_RUNTIME_DIR/rea-ghidra-attach-<user>`, otherwise
+Java's temporary directory. One bridge serves a directory at a time. The record
+holds a bearer token, which REA redacts from diagnostics.
+
+- **Identity.** The Program's recorded executable SHA-256 must equal the opened
+  target, and each connection must answer with the published run ID. Universal
+  Mach-O targets are refused because every slice shares that digest.
+- **Authority.** Analysis reads, comments, and bookmarks are read-only. Edits
+  and `inspect_native_load_image` are unavailable. REA never saves, closes, or
+  analyzes the Program and never stops the GUI task.
+- **Navigation.** `goto_address` moves the primary Listing through GoToService
+  to the start of the containing code unit and requires exact cursor readback;
+  unmapped addresses fail before navigation. `current_address`,
+  `current_procedure`, cursor-default `next_address`/`prev_address`, and
+  `get_navigation_context` read that cursor and fail when it is in another
+  Program.
+- **Freshness.** Results observe the live database, including the analyst's
+  edits, analysis options, image base, and language, and are never replayed from
+  snapshots. The bridge drops its inventories and decompiler cache after any
+  Program modification. Requests fail before the Program is analyzed and while
+  auto-analysis runs.
+- **Lifecycle.** Closing or cancelling disconnects REA only. Java cannot
+  interrupt the GUI task, so a cancelled request finishes in Ghidra before the
+  bridge serves the next connection.
+
+Attached mode requires Linux or macOS. Headless sessions report the cursor
+operations as `not_configured` and require explicit addresses for
+`next_address` and `prev_address`, which return the adjacent Listing code unit
+in mapped memory.
+
+`node scripts/verify-ghidra-navigation.mjs <elf> [procedure]` verifies headless
+navigation, or a running attached bridge holding the same file when
+`REA_GHIDRA_ATTACH_ENDPOINT` is set.
 
 ## Request payload ceiling
 

@@ -992,6 +992,9 @@ dossiers, instructions, recovered data types, measured load mappings, loaded
 memory bytes, and observed file offsets. Independent load-image attestation
 supports DOS MZ, explicitly selected COM, and explicit raw-binary imports;
 PE returns measurements with an unsupported attestation status.
+To analyze and navigate a Program in a CodeBrowser you launched, set
+`REA_GHIDRA_ATTACH_ENDPOINT` instead; see
+[attached CodeBrowser mode](ghidra-provider.md#attached-codebrowser-mode).
 ELF target opening checks the declared program and section header tables and
 their file-backed ranges before selecting a provider. A declaration beyond EOF
 is refused with its range and the actual file size, including a file cut one

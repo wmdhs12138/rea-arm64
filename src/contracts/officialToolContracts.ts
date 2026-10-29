@@ -79,12 +79,12 @@ export const OFFICIAL_TOOL_CONTRACTS = [
   ),
   official(
     "current_address",
-    "Return Hopper's current cursor address for the selected document. Use only for interactive navigation state; prefer explicit addresses in reproducible investigations.",
+    "Return the GUI cursor address of Hopper or an attached Ghidra CodeBrowser for the selected document. Use only for interactive navigation state; prefer explicit addresses in reproducible investigations.",
     z.object({ document }),
   ),
   official(
     "current_procedure",
-    "Return the analyzed procedure containing Hopper's current cursor. This uses GUI cursor state and is not a procedure-name lookup.",
+    "Return the analyzed procedure containing the GUI cursor of Hopper or an attached Ghidra CodeBrowser. This uses GUI cursor state and is not a procedure-name lookup.",
     z.object({ document }),
   ),
   official(
@@ -94,7 +94,7 @@ export const OFFICIAL_TOOL_CONTRACTS = [
   ),
   official(
     "goto_address",
-    "Move Hopper's GUI cursor to a mapped address and return the observed cursor address. Interior coordinates snap to the containing analyzed object's start. Unmapped destinations fail without moving the cursor. This changes navigation state but not analysis data; use explicit-address tools for headless workflows.",
+    "Move the GUI cursor of Hopper or an attached Ghidra CodeBrowser to a mapped address and return the observed cursor address. Interior coordinates snap to the containing analyzed object's start. Unmapped destinations fail without moving the cursor. This changes navigation state but not analysis data; use explicit-address tools for headless workflows.",
     z.object({ address, document }),
   ),
   official(
@@ -142,12 +142,12 @@ export const OFFICIAL_TOOL_CONTRACTS = [
   ),
   official(
     "next_address",
-    "Return the next analyzed object address after an explicit address or current cursor. This is a navigation primitive, not instruction-flow or CFG analysis.",
+    "Return the next analyzed object address after an explicit address or the GUI cursor; headless Ghidra requires an address. This is a navigation primitive, not instruction-flow or CFG analysis.",
     z.object({ document, address: optionalAddress }),
   ),
   official(
     "prev_address",
-    "Return the previous analyzed object start before an explicit address or current cursor. This is a navigation primitive and may fail at document boundaries; data objects and instructions remain distinct from control flow.",
+    "Return the previous analyzed object start before an explicit address or the GUI cursor; headless Ghidra requires an address. This is a navigation primitive and may fail at document boundaries; data objects and instructions remain distinct from control flow.",
     z.object({ document, address: optionalAddress }),
   ),
   official(

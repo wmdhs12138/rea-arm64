@@ -7,8 +7,14 @@ import {
   type WindowsNativeReadiness,
 } from "../process/WindowsAuthority.js";
 import { GHIDRA_FUNCTION_OPERATIONS } from "./GhidraFunctionValues.js";
-import { GHIDRA_INVENTORY_OPERATIONS } from "./GhidraInventoryValues.js";
-import { GHIDRA_MUTATING_OPERATIONS } from "./GhidraSessionValues.js";
+import {
+  GHIDRA_ATTACHED_CURSOR_OPERATIONS,
+  GHIDRA_INVENTORY_OPERATIONS,
+} from "./GhidraInventoryValues.js";
+import {
+  GHIDRA_ATTACHED_OPERATIONS,
+  GHIDRA_MUTATING_OPERATIONS,
+} from "./GhidraSessionValues.js";
 
 /** Target architectures admitted by the Windows P0 native PE boundary. */
 export const WINDOWS_P0_NATIVE_PE_ARCHITECTURES: readonly string[] =
@@ -36,11 +42,25 @@ export const GHIDRA_OPERATIONS = Object.freeze(
   ),
 );
 
+/** Session lifecycle: an REA-owned import, or a user-launched CodeBrowser. */
+export type GhidraSessionMode = "headless" | "attached";
+
+/** How to select attached mode; REA never launches the GUI or its script. */
+export const GHIDRA_ATTACH_REMEDIATION =
+  "Open the target in a Ghidra CodeBrowser, run bridge/ghidra/ReaGhidraBridge.java from its Script Manager, and set REA_GHIDRA_ATTACH_ENDPOINT to the endpoint path it prints.";
+
 /** Health limitations shared by every Ghidra-backed capability. */
 export const healthLimitations = Object.freeze([
   "The session serves operations only after Ghidra reports default auto-analysis complete; incomplete analysis does not expose partial results.",
   "The imported Program and temporary project are ephemeral and deleted on close. Annotation operations edit session database metadata; original executable bytes are never written.",
   "Cancelling an active Ghidra request terminates its ephemeral database and discards session annotations. The selected target remains open; the next provider query imports the original artifact again.",
+]);
+
+/** Health limitations shared by every CodeBrowser-attached capability. */
+export const attachedHealthLimitations = Object.freeze([
+  "Attached mode serves the one Program on which a user-launched CodeBrowser started bridge/ghidra/ReaGhidraBridge.java. REA requires its recorded executable SHA-256 to match the opened target, never edits, saves, or closes that Program, and never stops the GUI task.",
+  "Results observe the live CodeBrowser database, including the analyst's edits, analysis options, image base, and language; they are not bound to an REA analysis profile and are never replayed from snapshots. Requests fail before the Program is analyzed and while auto-analysis runs.",
+  "Cancelling a request disconnects REA; the bridge finishes in-flight Ghidra work before serving the next connection.",
 ]);
 
 /** Additional limitations applied to the experimental Windows x64 P0 boundary. */
@@ -57,9 +77,13 @@ const searchLimitation =
   "Regex mode uses Java Pattern semantics. Matcher or compiler stack exhaustion returns a resource constraint without closing the session; literal mode avoids regex recursion and returns complete matching values.";
 
 /** Limitation text for one admitted operation, including the common base. */
-export const limitationsFor = (operation: string): readonly string[] => {
+export const limitationsFor = (
+  operation: string,
+  mode: GhidraSessionMode = "headless",
+): readonly string[] => {
+  const attached = mode === "attached";
   const common = [
-    ...healthLimitations,
+    ...(attached ? attachedHealthLimitations : healthLimitations),
     "Default-space addresses use lowercase 0x-prefixed hexadecimal; other address spaces use <percent-encoded-space>:0x<hex>.",
   ];
   switch (operation) {
@@ -91,14 +115,18 @@ export const limitationsFor = (operation: string): readonly string[] => {
     case "set_inline_comment":
       return [
         ...common,
-        "Ghidra requires an explicit mapped address; PRE and EOL listing comments represent regular and inline comments. Empty writes clear the comment. Writes use a transaction and exact readback, invalidate analysis snapshots, and are discarded on close.",
+        attached
+          ? "Ghidra requires an explicit mapped address; PRE and EOL listing comments represent regular and inline comments."
+          : "Ghidra requires an explicit mapped address; PRE and EOL listing comments represent regular and inline comments. Empty writes clear the comment. Writes use a transaction and exact readback, invalidate analysis snapshots, and are discarded on close.",
       ];
     case "list_bookmarks":
     case "set_bookmark":
     case "unset_bookmark":
       return [
         ...common,
-        "Ghidra exposes only analyst Note bookmarks in the REA category. Analysis warnings and bookmarks in other categories are not listed or modified. Names are stored in the bookmark comment; an empty name reads as null. An omitted name preserves an existing name. These ephemeral metadata edits do not move a GUI cursor or change executable bytes.",
+        attached
+          ? "Ghidra exposes only analyst Note bookmarks in the REA category; analysis warnings and bookmarks in other categories are not listed. Names are stored in the bookmark comment; an empty name reads as null."
+          : "Ghidra exposes only analyst Note bookmarks in the REA category. Analysis warnings and bookmarks in other categories are not listed or modified. Names are stored in the bookmark comment; an empty name reads as null. An omitted name preserves an existing name. These ephemeral metadata edits do not move a GUI cursor or change executable bytes.",
       ];
     case "inspect_native_load_image":
       return [
@@ -124,7 +152,29 @@ export const limitationsFor = (operation: string): readonly string[] => {
     case "list_documents":
       return [
         ...common,
-        "A headless Ghidra session contains exactly one imported Program, unlike Hopper's multi-document GUI session.",
+        attached
+          ? "Attached mode exposes exactly the Program on which the bridge started; other Programs open in Ghidra are not served."
+          : "A headless Ghidra session contains exactly one imported Program, unlike Hopper's multi-document GUI session.",
+      ];
+    case "next_address":
+    case "prev_address":
+      return [
+        ...common,
+        "Adjacent objects are Ghidra Listing code units: instructions, defined data, or undefined bytes. An interior address resolves through its containing code unit, and results must lie in mapped memory blocks. This is navigation, not control flow.",
+        attached
+          ? "An omitted address uses the CodeBrowser Listing cursor."
+          : "Headless sessions have no GUI cursor and require an explicit address.",
+      ];
+    case "current_address":
+    case "current_procedure":
+      return [
+        ...common,
+        "Reads the primary CodeBrowser Listing cursor on the Swing thread and fails when it is in another Program. current_procedure returns the qualified name of the function containing that address and fails outside functions. Cursor state is volatile and never cached.",
+      ];
+    case "goto_address":
+      return [
+        ...common,
+        "Moves the CodeBrowser Listing to the start of the code unit containing a mapped address through GoToService, then requires that exact cursor readback. Unmapped addresses fail before navigation. Only navigation state and history change, not the Program.",
       ];
     case "list_names":
       return [
@@ -204,17 +254,23 @@ export const limitationsFor = (operation: string): readonly string[] => {
   }
 };
 
+const cursorOperations: ReadonlySet<string> = new Set(
+  GHIDRA_ATTACHED_CURSOR_OPERATIONS,
+);
+const attachedOperations: ReadonlySet<string> = new Set(
+  GHIDRA_ATTACHED_OPERATIONS,
+);
+
 /** Provider-neutral capabilities advertised by every non-Windows Ghidra session. */
 export const CAPABILITIES: readonly CapabilityDescriptor[] = Object.freeze(
   providerOperations.map((operation) => {
-    return Object.freeze({
+    const descriptor = {
       provider: GHIDRA_PROVIDER_IDENTITY,
       operation,
-      available: true,
-      reason: null,
       // Project writes are private import machinery. Analysis reads are bound
       // to the artifact/profile; session annotations disable snapshot replay.
       ...(GHIDRA_MUTATING_OPERATIONS.has(operation) ||
+      cursorOperations.has(operation) ||
       operation === "list_documents" ||
       operation === "current_document"
         ? {}
@@ -229,9 +285,52 @@ export const CAPABILITIES: readonly CapabilityDescriptor[] = Object.freeze(
         requiresRoot: false,
       }),
       limitations: Object.freeze(limitationsFor(operation)),
-    });
+    };
+    return Object.freeze(
+      cursorOperations.has(operation)
+        ? {
+            ...descriptor,
+            available: false as const,
+            reason: `Headless Ghidra has no CodeBrowser cursor. ${GHIDRA_ATTACH_REMEDIATION}`,
+            availabilityCode: "not_configured" as const,
+          }
+        : { ...descriptor, available: true as const, reason: null },
+    );
   }),
 );
+
+/** Capabilities of a CodeBrowser-attached session: live reads and navigation. */
+export const ATTACHED_CAPABILITIES: readonly CapabilityDescriptor[] =
+  Object.freeze(
+    providerOperations.map((operation) => {
+      const descriptor = {
+        provider: GHIDRA_PROVIDER_IDENTITY,
+        operation,
+        cachePolicy: "live" as const,
+        effects: Object.freeze({
+          mutatesArtifact: GHIDRA_MUTATING_OPERATIONS.has(operation),
+          launchesProcess: false,
+          mayShowUi: operation === "goto_address",
+          mayAccessNetwork: false,
+          mayWriteFilesystem: false,
+          changesPermissions: false,
+          requiresRoot: false,
+        }),
+        limitations: Object.freeze(limitationsFor(operation, "attached")),
+      };
+      return Object.freeze(
+        attachedOperations.has(operation)
+          ? { ...descriptor, available: true as const, reason: null }
+          : {
+              ...descriptor,
+              available: false as const,
+              reason:
+                "Ghidra attached mode serves the CodeBrowser Program read-only and does not attest REA-owned imports; unset REA_GHIDRA_ATTACH_ENDPOINT to use an ephemeral headless session.",
+              availabilityCode: "not_configured" as const,
+            },
+      );
+    }),
+  );
 
 /** Capabilities advertised for the experimental Windows x64 P0 boundary. */
 export const windowsP0Capabilities = (

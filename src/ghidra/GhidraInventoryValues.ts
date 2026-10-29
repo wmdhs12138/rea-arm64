@@ -27,7 +27,8 @@ import { analysisInputErrorFromIssues } from "../domain/inputIssueProjection.js"
 
 /**
  * Direct inventory operations admitted by the Ghidra adapter. All are reads
- * except metadata operations, which edit the ephemeral session database.
+ * except metadata operations, which edit the ephemeral session database, and
+ * goto_address, which moves an attached CodeBrowser cursor.
  */
 export const GHIDRA_INVENTORY_OPERATIONS = [
   "read_binary_inventory_summary",
@@ -55,6 +56,11 @@ export const GHIDRA_INVENTORY_OPERATIONS = [
   "search_strings",
   "set_address_name",
   "set_addresses_names",
+  "next_address",
+  "prev_address",
+  "current_address",
+  "current_procedure",
+  "goto_address",
 ] as const;
 
 /** Inventory operations that edit analyst metadata in the ephemeral database. */
@@ -65,6 +71,13 @@ export const GHIDRA_INVENTORY_MUTATIONS = [
   "set_inline_comment",
   "set_bookmark",
   "unset_bookmark",
+] as const satisfies readonly GhidraInventoryOperation[];
+
+/** Cursor-state operations that only a CodeBrowser-attached bridge serves. */
+export const GHIDRA_ATTACHED_CURSOR_OPERATIONS = [
+  "current_address",
+  "current_procedure",
+  "goto_address",
 ] as const satisfies readonly GhidraInventoryOperation[];
 
 /** One direct inventory operation implemented by the packaged Java bridge. */
@@ -90,6 +103,17 @@ export const ghidraInputAddressSchema = z
   );
 const explicitAddress = ghidraInputAddressSchema;
 const filteredAddress = explicitAddress.nullable().default(null);
+/** Null selects the attached CodeBrowser cursor; headless input requires an address. */
+const navigationInput = z
+  .object({ document, address: explicitAddress.nullable().default(null) })
+  .strict();
+const headlessNavigationInput = z
+  .object({ document, address: explicitAddress })
+  .strict();
+const CURSOR_DEFAULT_OPERATIONS: ReadonlySet<string> = new Set([
+  "next_address",
+  "prev_address",
+]);
 const searchInput = {
   pattern: z.string().min(1),
   mode: z.enum(["literal", "regex"]).default("literal"),
@@ -149,6 +173,11 @@ const inputSchemas = {
     .strict(),
   search_procedures: z.object(searchInput).strict(),
   search_strings: z.object(searchInput).strict(),
+  next_address: navigationInput,
+  prev_address: navigationInput,
+  current_address: z.object({ document }).strict(),
+  current_procedure: z.object({ document }).strict(),
+  goto_address: z.object({ document, address: explicitAddress }).strict(),
   set_address_name: z
     .object({ document, address: explicitAddress, name: z.string().min(1) })
     .strict(),
@@ -164,12 +193,20 @@ const inputSchemas = {
     ),
 } satisfies Readonly<Record<GhidraInventoryOperation, z.ZodType>>;
 
-/** Validate and default one provider request before it crosses the socket. */
+/**
+ * Validate and default one provider request before it crosses the socket.
+ * Only an attached bridge has a cursor to stand in for an omitted address.
+ */
 export const parseGhidraInventoryInput = (
   operation: GhidraInventoryOperation,
   value: Readonly<Record<string, JsonValue>>,
+  options: { readonly cursor?: boolean } = {},
 ): Result<Readonly<Record<string, JsonValue>>, AnalysisInputError> => {
-  const parsed = inputSchemas[operation].safeParse(value);
+  const schema =
+    options.cursor !== true && CURSOR_DEFAULT_OPERATIONS.has(operation)
+      ? headlessNavigationInput
+      : inputSchemas[operation];
+  const parsed = schema.safeParse(value);
   if (!parsed.success)
     return err(
       analysisInputErrorFromIssues(operation, parsed.error.issues, value, {
@@ -386,6 +423,11 @@ const resultSchemas = {
   search_strings: z.array(addressedItem),
   set_address_name: z.boolean(),
   set_addresses_names: z.record(z.string(), z.boolean()),
+  next_address: nativeAddressObservationSchema,
+  prev_address: nativeAddressObservationSchema,
+  current_address: nativeAddressObservationSchema,
+  current_procedure: identifier,
+  goto_address: nativeAddressObservationSchema,
 } satisfies Readonly<Record<GhidraInventoryOperation, z.ZodType>>;
 
 /** The format owner retains raw output only when projection omits reported facts. */

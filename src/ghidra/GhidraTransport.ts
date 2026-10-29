@@ -1,5 +1,5 @@
 import { access, lstat } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 import { PrivateRuntimeRoot } from "../process/PrivateRuntimeRoot.js";
 import { readWindowsPrivateRuntimeFile } from "../windows/WindowsPrivateRuntime.js";
@@ -98,55 +98,17 @@ export const observeGhidraEndpoint = async (
         assertArtifactReadActive(options.signal);
         return parseTcpEndpoint(endpoint, encoded);
       }
-      return withArtifactRegularFile(
-        endpoint.path,
-        resources,
-        options.signal,
-        async ({ handle: file }) => {
-          const initial = await file.stat({ bigint: true });
-          assertArtifactReadActive(options.signal);
-          if (initial.size > BigInt(MAX_TCP_ENDPOINT_BYTES))
-            throw endpointFailure(
-              endpoint,
-              "Ghidra TCP endpoint is invalid",
-              new ArtifactReaderFailure(
-                "limit",
-                `Ghidra endpoint record exceeds its compact publication bound (${initial.size} > ${MAX_TCP_ENDPOINT_BYTES} bytes)`,
-              ),
-            );
-          const input = readArtifactFileChunks(file, {
-            end: initial.size,
-            signal: options.signal,
-          });
-          const chunks: Buffer[] = [];
-          for await (const chunk of input) chunks.push(Buffer.from(chunk));
-          const coverage = input.readCoverage();
-          const after = await file.stat({ bigint: true });
-          const named = await lstat(endpoint.path, { bigint: true }).catch(
-            (cause: unknown) => {
-              throw endpointFailure(
-                endpoint,
-                "Ghidra TCP endpoint changed during observation",
-                cause,
-              );
-            },
-          );
-          if (
-            coverage.kind !== "complete" ||
-            coverage.bytes !== initial.size ||
-            !sameRegularFileState(initial, after) ||
-            !sameRegularFileState(initial, named)
-          )
-            throw endpointFailure(
-              endpoint,
-              "Ghidra TCP endpoint changed during observation",
-            );
-          assertArtifactReadActive(options.signal);
-          return parseTcpEndpoint(
-            endpoint,
-            Buffer.concat(chunks).toString("utf8"),
-          );
-        },
+      return parseTcpEndpoint(
+        endpoint,
+        await readRuntimeRecord(
+          endpoint,
+          {
+            label: "Ghidra TCP endpoint",
+            maximumBytes: MAX_TCP_ENDPOINT_BYTES,
+          },
+          resources,
+          options.signal,
+        ),
       );
     });
     return ok(target);
@@ -156,6 +118,119 @@ export const observeGhidraEndpoint = async (
       (process.platform === "win32" && isWindowsEndpointWriterBusy(cause))
     )
       return ok(null);
+    return err(observationFailure(endpoint, cause));
+  }
+};
+
+/** Read one compact bridge record whose file identity stays stable throughout. */
+const readRuntimeRecord = (
+  endpoint: GhidraEndpoint,
+  {
+    label,
+    maximumBytes,
+  }: { readonly label: string; readonly maximumBytes: number },
+  resources: ArtifactResourceScope,
+  signal: AbortSignal | undefined,
+): Promise<string> =>
+  withArtifactRegularFile(
+    endpoint.path,
+    resources,
+    signal,
+    async ({ handle: file }) => {
+      const initial = await file.stat({ bigint: true });
+      assertArtifactReadActive(signal);
+      if (initial.size > BigInt(maximumBytes))
+        throw endpointFailure(
+          endpoint,
+          `${label} is invalid`,
+          new ArtifactReaderFailure(
+            "limit",
+            `Ghidra endpoint record exceeds its compact publication bound (${initial.size} > ${maximumBytes} bytes)`,
+          ),
+        );
+      const input = readArtifactFileChunks(file, {
+        end: initial.size,
+        signal,
+      });
+      const chunks: Buffer[] = [];
+      for await (const chunk of input) chunks.push(Buffer.from(chunk));
+      const coverage = input.readCoverage();
+      const after = await file.stat({ bigint: true });
+      const named = await lstat(endpoint.path, { bigint: true }).catch(
+        (cause: unknown) => {
+          throw endpointFailure(
+            endpoint,
+            `${label} changed during observation`,
+            cause,
+          );
+        },
+      );
+      if (
+        coverage.kind !== "complete" ||
+        coverage.bytes !== initial.size ||
+        !sameRegularFileState(initial, after) ||
+        !sameRegularFileState(initial, named)
+      )
+        throw endpointFailure(endpoint, `${label} changed during observation`);
+      assertArtifactReadActive(signal);
+      return Buffer.concat(chunks).toString("utf8");
+    },
+  );
+
+/** Connection record published by ReaGhidraBridge.java inside a CodeBrowser. */
+const attachedEndpointSchema = z.strictObject({
+  schema: z.literal("rea-ghidra-attach-v1"),
+  transport: z.literal("unix-socket"),
+  socket_path: z.string().min(1).refine(isAbsolute),
+  token: z.string().regex(/^[0-9a-f]{64}$/u),
+  run_id: z.string().uuid(),
+});
+// Compact Gson JSON: fixed keys, a 64-hex token, a UUID and one socket path.
+const MAX_ATTACHED_ENDPOINT_BYTES = 8 * 1024;
+
+/** Bearer-authenticated coordinates of one CodeBrowser-attached bridge run. */
+export type GhidraAttachedEndpoint = z.infer<typeof attachedEndpointSchema>;
+
+/**
+ * Read the record a running attached bridge publishes. A missing record means
+ * no bridge is serving; it is never waited for, because REA does not own it.
+ */
+export const readGhidraAttachedEndpoint = async (
+  path: string,
+  options: {
+    readonly signal?: AbortSignal;
+    readonly resourceScope: ArtifactResourceScope;
+  },
+): Promise<Result<GhidraAttachedEndpoint, GhidraSessionError>> => {
+  const endpoint: GhidraEndpoint = { transport: "unix-socket", path };
+  try {
+    const encoded = await options.resourceScope.run(() =>
+      readRuntimeRecord(
+        endpoint,
+        {
+          label: "Ghidra attached endpoint",
+          maximumBytes: MAX_ATTACHED_ENDPOINT_BYTES,
+        },
+        options.resourceScope,
+        options.signal,
+      ),
+    );
+    try {
+      return ok(attachedEndpointSchema.parse(JSON.parse(encoded)));
+    } catch {
+      // The record carries a bearer token; never echo its contents.
+      return err(
+        endpointFailure(endpoint, "Ghidra attached endpoint is invalid"),
+      );
+    }
+  } catch (cause: unknown) {
+    if (isMissing(cause))
+      return err(
+        endpointFailure(
+          endpoint,
+          "No Ghidra attached bridge is serving this endpoint; run bridge/ghidra/ReaGhidraBridge.java from the CodeBrowser Script Manager",
+        ),
+      );
     return err(observationFailure(endpoint, cause));
   }
 };

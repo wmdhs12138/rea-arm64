@@ -24,6 +24,8 @@ public final class ReaGhidraNoReturnFix extends GhidraScript {
 
   @Override
   public void run() throws Exception {
+    // Import step only; Script Manager runs would edit an analyst's Program.
+    if (!isRunningHeadless()) throw new IllegalStateException("REA headless import step");
     // Windows P0 does not admit analysis-database mutation.
     if (System.getProperty("os.name", "").startsWith("Windows")) return;
     FunctionManager fm = currentProgram.getFunctionManager();
