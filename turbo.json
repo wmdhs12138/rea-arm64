@@ -7,7 +7,8 @@
     "GOMAXPROCS",
     "GOMEMLIMIT",
     "UV_THREADPOOL_SIZE",
-    "REA_TYPESCRIPT_COMPILER"
+    "REA_TYPESCRIPT_COMPILER",
+    "REA_TYPESCRIPT_PACKAGE"
   ],
   "tasks": {
     "compile": {

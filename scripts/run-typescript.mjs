@@ -21,19 +21,31 @@ export const selectTypeScriptCompiler = (
     : "typescript";
 };
 
-export const resolveTypeScriptCompiler = () => {
+export const resolveTypeScriptCompiler = (environment = process.env) => {
   const require = createRequire(import.meta.url);
+  const requested = environment.REA_TYPESCRIPT_PACKAGE;
+  if (
+    requested !== undefined &&
+    !["tsrs", "typescript", "typescript6", "typescript-termux"].includes(
+      requested,
+    )
+  )
+    throw new Error(
+      "REA_TYPESCRIPT_PACKAGE must name a pinned compiler: tsrs, typescript, typescript6 or typescript-termux",
+    );
   const rustPackagePath = require.resolve("tsrs/package.json");
   const rustPackage = JSON.parse(readFileSync(rustPackagePath, "utf8"));
-  const compiler = selectTypeScriptCompiler(
-    process.platform,
-    process.arch,
-    rustPackage.optionalDependencies,
-  );
+  const compiler =
+    requested ??
+    selectTypeScriptCompiler(
+      process.platform,
+      process.arch,
+      rustPackage.optionalDependencies,
+    );
   const packagePath =
     compiler === "tsrs"
       ? rustPackagePath
-      : require.resolve("typescript/package.json");
+      : require.resolve(`${compiler}/package.json`);
   const metadata =
     compiler === "tsrs"
       ? rustPackage

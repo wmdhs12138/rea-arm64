@@ -24,18 +24,19 @@ const rustPackage = z
   .parse(
     JSON.parse(await readFile(require.resolve("tsrs/package.json"), "utf8")),
   );
-const officialPackage = z
-  .object({ version: z.string() })
-  .parse(
-    JSON.parse(
-      await readFile(require.resolve("typescript/package.json"), "utf8"),
-    ),
-  );
-const execute = (script: string, args: string[]) =>
+const execute = (
+  script: string,
+  args: string[],
+  compilerPackage = process.env.REA_TYPESCRIPT_PACKAGE,
+) =>
   spawnSync(process.execPath, [script, ...args], {
     encoding: "utf8",
     timeout: 15_000,
-    env: { ...process.env, TURBO_HASH: undefined },
+    env: {
+      ...process.env,
+      TURBO_HASH: undefined,
+      REA_TYPESCRIPT_PACKAGE: compilerPackage,
+    },
   });
 
 it.each([
@@ -70,15 +71,11 @@ it("runs the selected installed compiler", () => {
   const result = execute(launcher, ["--version"]);
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
-  const compiler = selectTypeScriptCompiler(
-    process.platform,
-    process.arch,
-    rustPackage.optionalDependencies,
-  );
+  const compiler = resolveTypeScriptCompiler();
   expect(result.stdout).toContain(
-    compiler === "tsrs"
+    compiler.name === "tsrs"
       ? `tsrs ${rustPackage.version}`
-      : `Version ${officialPackage.version}`,
+      : `Version ${compiler.identity.split("@")[1]}`,
   );
 });
 
@@ -107,7 +104,9 @@ it("forwards build arguments and preserves real type errors and exit status", as
   const resourceArgs =
     resolveTypeScriptCompiler().name === "tsrs"
       ? ["--checkers", "1", "--maxMemory", "1G"]
-      : ["--checkers", "1"];
+      : resolveTypeScriptCompiler().name === "typescript"
+        ? ["--checkers", "1"]
+        : [];
   const checked = execute(launcher, ["-p", root, "--noEmit", ...resourceArgs]);
   expect(checked.error).toBeUndefined();
   expect(checked.status, checked.stdout + checked.stderr).toBe(0);
@@ -164,7 +163,7 @@ it.skipIf(process.platform === "win32")(
           : 'console.log("unexpected fallback");\n',
       );
     }
-    const result = execute(script, ["--noEmit"]);
+    const result = execute(script, ["--noEmit"], "tsrs");
     expect(result.error).toBeUndefined();
     expect(result.status, result.stdout + result.stderr).toBe(42);
     expect(result.stderr).toContain("supported compiler failed");
@@ -180,7 +179,7 @@ it.skipIf(process.platform === "win32")(
         },
       }),
     );
-    const missing = execute(script, ["--noEmit"]);
+    const missing = execute(script, ["--noEmit"], "tsrs");
     expect(missing.status, missing.stdout + missing.stderr).toBe(1);
     expect(missing.stderr).toContain("ERR_MODULE_NOT_FOUND");
     expect(missing.stdout).not.toContain("unexpected fallback");
@@ -204,3 +203,22 @@ it.each([undefined, "typescript@stale"])(
     expect(result.stderr).toContain("Compiler identity is missing or stale");
   },
 );
+
+it.each(["typescript6", "typescript-termux"])(
+  "runs the explicitly selected portable compiler %s",
+  (name) => {
+    const compiler = resolveTypeScriptCompiler({
+      REA_TYPESCRIPT_PACKAGE: name,
+    });
+    const result = execute(launcher, ["--version"], name);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain(
+      `Version ${compiler.identity.split("@")[1]}`,
+    );
+  },
+);
+it("rejects unknown compiler overrides before launching a process", () => {
+  expect(() =>
+    resolveTypeScriptCompiler({ REA_TYPESCRIPT_PACKAGE: "unknown" }),
+  ).toThrow("REA_TYPESCRIPT_PACKAGE");
+});
