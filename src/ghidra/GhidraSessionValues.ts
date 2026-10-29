@@ -6,7 +6,7 @@ import type { JsonValue } from "../domain/jsonValue.js";
 import { err, ok, type Result } from "../domain/result.js";
 import {
   GHIDRA_INVENTORY_OPERATIONS,
-  GHIDRA_NAMING_OPERATIONS,
+  GHIDRA_INVENTORY_MUTATIONS,
 } from "./GhidraInventoryValues.js";
 import { GHIDRA_FUNCTION_OPERATIONS } from "./GhidraFunctionValues.js";
 import { ghidraExtensionResultSchema } from "./extensions/GhidraExtensions.js";
@@ -23,7 +23,7 @@ export const GHIDRA_SESSION_CAPABILITIES = [
 /** Methods that edit the session database; read-only bridges omit them. */
 export const GHIDRA_MUTATING_OPERATIONS: ReadonlySet<string> = new Set([
   "annotate_native_function",
-  ...GHIDRA_NAMING_OPERATIONS,
+  ...GHIDRA_INVENTORY_MUTATIONS,
 ]);
 
 // Shared wire budget: Java bounds the aggregate before serializing the handshake.

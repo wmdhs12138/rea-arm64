@@ -27,7 +27,7 @@ import { analysisInputErrorFromIssues } from "../domain/inputIssueProjection.js"
 
 /**
  * Direct inventory operations admitted by the Ghidra adapter. All are reads
- * except the naming operations, which edit the ephemeral session database.
+ * except metadata operations, which edit the ephemeral session database.
  */
 export const GHIDRA_INVENTORY_OPERATIONS = [
   "read_binary_inventory_summary",
@@ -36,6 +36,14 @@ export const GHIDRA_INVENTORY_OPERATIONS = [
   "search_bytes",
   "address_to_file_offset",
   "address_name",
+  "current_document",
+  "comment",
+  "inline_comment",
+  "list_bookmarks",
+  "set_comment",
+  "set_inline_comment",
+  "set_bookmark",
+  "unset_bookmark",
   "list_documents",
   "list_names",
   "list_procedures",
@@ -49,10 +57,14 @@ export const GHIDRA_INVENTORY_OPERATIONS = [
   "set_addresses_names",
 ] as const;
 
-/** Inventory operations that write analyst names into the session database. */
-export const GHIDRA_NAMING_OPERATIONS = [
+/** Inventory operations that edit analyst metadata in the ephemeral database. */
+export const GHIDRA_INVENTORY_MUTATIONS = [
   "set_address_name",
   "set_addresses_names",
+  "set_comment",
+  "set_inline_comment",
+  "set_bookmark",
+  "unset_bookmark",
 ] as const satisfies readonly GhidraInventoryOperation[];
 
 /** One direct inventory operation implemented by the packaged Java bridge. */
@@ -108,6 +120,24 @@ const inputSchemas = {
     address: explicitAddress,
   }),
   address_name: z.object({ document, address: explicitAddress }).strict(),
+  current_document: z.object({}).strict(),
+  comment: z.object({ document, address: explicitAddress }).strict(),
+  inline_comment: z.object({ document, address: explicitAddress }).strict(),
+  list_bookmarks: z.object({ document }).strict(),
+  set_comment: z
+    .object({ document, address: explicitAddress, comment: z.string() })
+    .strict(),
+  set_inline_comment: z
+    .object({ document, address: explicitAddress, comment: z.string() })
+    .strict(),
+  set_bookmark: z
+    .object({
+      document,
+      address: explicitAddress,
+      name: z.string().exactOptional(),
+    })
+    .strict(),
+  unset_bookmark: z.object({ document, address: explicitAddress }).strict(),
   list_documents: z.object({}).strict(),
   list_names: z.object({ document, address: filteredAddress }).strict(),
   list_procedures: z.object({ document }).strict(),
@@ -332,6 +362,19 @@ const resultSchemas = {
     file_offset: z.int().min(0).max(Number.MAX_SAFE_INTEGER),
   }),
   address_name: z.string().nullable(),
+  current_document: identifier,
+  comment: z.string().nullable(),
+  inline_comment: z.string().nullable(),
+  list_bookmarks: z.array(
+    z.strictObject({
+      address: nativeAddressObservationSchema,
+      name: z.string().nullable(),
+    }),
+  ),
+  set_comment: z.boolean(),
+  set_inline_comment: z.boolean(),
+  set_bookmark: z.boolean(),
+  unset_bookmark: z.boolean(),
   list_documents: z.array(z.string().min(1)).length(1),
   list_names: z.array(symbolItem),
   list_procedures: z.array(procedureItem),

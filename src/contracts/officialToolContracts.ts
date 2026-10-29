@@ -74,7 +74,7 @@ export const OFFICIAL_TOOL_CONTRACTS = [
   ),
   official(
     "comment",
-    "Read the regular analysis comment at an address, defaulting to the current cursor. This is read-only and returns null when no comment exists; use set_comment to persist a finding.",
+    "Read the regular analysis comment at an address. Ghidra requires an explicit address; GUI providers may default to their current cursor. This is read-only and returns null when no comment exists; use set_comment to persist a finding.",
     z.object({ document, address: optionalAddress }),
   ),
   official(
@@ -89,7 +89,7 @@ export const OFFICIAL_TOOL_CONTRACTS = [
   ),
   official(
     "current_document",
-    "Return the document currently selected by REA's Hopper bridge.",
+    "Return the selected provider document. A Ghidra headless session returns its single imported Program identity.",
     z.object({}),
   ),
   official(
@@ -99,12 +99,12 @@ export const OFFICIAL_TOOL_CONTRACTS = [
   ),
   official(
     "inline_comment",
-    "Read the inline instruction comment at an address, defaulting to the current cursor. Returns null when absent; use set_inline_comment to write one.",
+    "Read the inline instruction comment at an address. Ghidra requires an explicit address; GUI providers may default to their current cursor. Returns null when absent; use set_inline_comment to write one.",
     z.object({ document, address: optionalAddress }),
   ),
   official(
     "list_bookmarks",
-    "List every bookmark in the selected Hopper document as address and name pairs; unnamed bookmarks retain a null name. Use bookmarks as analyst-authored navigation aids; this does not discover code references.",
+    "List analyst bookmarks as address and name pairs (all Hopper bookmarks, or Ghidra Note bookmarks in the REA category); unnamed bookmarks retain a null name. Use bookmarks as analyst-authored navigation aids; this does not discover code references.",
     z.object({ document }),
   ),
   official(
@@ -229,7 +229,7 @@ export const OFFICIAL_TOOL_CONTRACTS = [
   ),
   official(
     "set_comment",
-    "Write a regular analysis comment at a hexadecimal address and return whether readback matched. An empty comment clears it. This mutates the Hopper document; use comments to record evidence IDs or reasoning.",
+    "Write a regular analysis comment at a hexadecimal address and return whether readback matched. An empty comment clears it. This mutates analysis metadata; Ghidra changes are discarded on close. Use comments to record evidence IDs or reasoning.",
     z.object({ address, comment: z.string(), document }),
   ),
   official(

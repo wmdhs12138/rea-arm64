@@ -218,14 +218,18 @@ describe("Ghidra mutation handshake", () => {
       parseGhidraSessionInfo(value, { ...expected, expectedReadOnly: true }).ok,
     ).toBe(false);
   });
-  it("treats address naming as database mutation", () => {
+  it("treats names, comments and bookmarks as database mutation", () => {
     expect([...GHIDRA_MUTATING_OPERATIONS].sort()).toEqual([
       "annotate_native_function",
       "set_address_name",
       "set_addresses_names",
+      "set_bookmark",
+      "set_comment",
+      "set_inline_comment",
+      "unset_bookmark",
     ]);
     const value = session();
-    for (const naming of ["set_address_name", "set_addresses_names"]) {
+    for (const naming of GHIDRA_MUTATING_OPERATIONS) {
       expect(value.capabilities).toContain(naming);
       expect(
         parseGhidraSessionInfo(

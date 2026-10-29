@@ -1,4 +1,4 @@
-// REA's packaged, read-only Ghidra headless bridge.
+// REA's packaged Ghidra headless bridge; metadata edits are session-local.
 // @category REA
 
 import java.io.BufferedReader;
@@ -77,6 +77,9 @@ import ghidra.program.model.data.DataType;
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.scalar.Scalar;
 import ghidra.program.model.listing.CommentType;
+import ghidra.program.model.listing.Bookmark;
+import ghidra.program.model.listing.BookmarkManager;
+import ghidra.program.model.listing.BookmarkType;
 import ghidra.program.model.listing.Data;
 import ghidra.program.model.listing.DataIterator;
 import ghidra.program.model.listing.Function;
@@ -121,6 +124,11 @@ public final class ReaGhidraBridge extends HeadlessScript {
     private static final int MAX_HIGH_PCODE_OPS = 3000;
     private static final int MAX_HIGH_PCODE_INPUTS_PER_OP = 64;
     private static final int MAX_HIGH_PCODE_DEF_USE_EDGES = 12000;
+    private static final String ANALYST_BOOKMARK_CATEGORY = "REA";
+    private static final Set<String> MUTATING_CAPABILITIES = Set.of(
+        "annotate_native_function", "set_address_name", "set_addresses_names",
+        "set_comment", "set_inline_comment", "set_bookmark", "unset_bookmark"
+    );
     private static final Gson GSON = new GsonBuilder().serializeNulls().create();
     private final Map<FileBytes, Boolean> targetSourceIdentity = new IdentityHashMap<>();
     private String admittedTargetSha256;
@@ -140,6 +148,14 @@ public final class ReaGhidraBridge extends HeadlessScript {
         "params"
     );
     private static final String[] CAPABILITIES = {
+        "current_document",
+        "comment",
+        "inline_comment",
+        "list_bookmarks",
+        "set_comment",
+        "set_inline_comment",
+        "set_bookmark",
+        "unset_bookmark",
         "read_binary_inventory_summary",
         "annotate_native_function",
         "set_address_name",
@@ -434,7 +450,18 @@ public final class ReaGhidraBridge extends HeadlessScript {
                 "Ghidra auto-analysis did not complete for this Program"
             );
         }
+        if (MUTATING_CAPABILITIES.contains(request.method) && !descriptor.transport.equals("unix-socket"))
+            throw new RequestFailure("method_unavailable", "Windows P0 does not admit database mutation");
         return switch (request.method) {
+            case "current_document" -> {
+                requireKeys(request.params, Set.of());
+                yield GSON.toJsonTree(currentProgram.getName());
+            }
+            case "comment", "inline_comment" -> readListingComment(request.params, request.method.equals("comment") ? CommentType.PRE : CommentType.EOL);
+            case "set_comment", "set_inline_comment" -> setListingComment(request.params, request.method.equals("set_comment") ? CommentType.PRE : CommentType.EOL);
+            case "list_bookmarks" -> listAnalystBookmarks(request.params);
+            case "set_bookmark" -> setAnalystBookmark(request.params);
+            case "unset_bookmark" -> unsetAnalystBookmark(request.params);
             case "read_binary_inventory_summary" -> binaryInventorySummary(request.params);
             case "inspect_native_load_image" -> inspectNativeLoadImage(request.params);
             case "read_bytes" -> readMemoryBytes(request.params);
@@ -469,14 +496,10 @@ public final class ReaGhidraBridge extends HeadlessScript {
                 yield result;
             }
             case "set_address_name", "set_addresses_names" -> {
-                if (!descriptor.transport.equals("unix-socket"))
-                    throw new RequestFailure("method_unavailable", "Windows P0 does not admit database mutation");
                 yield request.method.equals("set_address_name")
                     ? setAddressName(request.params) : setAddressesNames(request.params);
             }
             case "annotate_native_function" -> {
-                if (!descriptor.transport.equals("unix-socket"))
-                    throw new RequestFailure("method_unavailable", "Windows P0 does not admit database mutation");
                 yield annotateNativeFunction(request.params);
             }
             default -> throw new RequestFailure(
@@ -517,8 +540,7 @@ public final class ReaGhidraBridge extends HeadlessScript {
         result.addProperty("analysis_timed_out", timedOut);
         result.add("capabilities", GSON.toJsonTree(
             java.util.Arrays.stream(CAPABILITIES)
-                .filter(value -> !readOnly || !(value.equals("annotate_native_function")
-                    || value.equals("set_address_name") || value.equals("set_addresses_names")))
+                .filter(value -> !readOnly || !MUTATING_CAPABILITIES.contains(value))
                 .toArray(String[]::new)
         ));
         result.add("target", target);
@@ -2003,6 +2025,111 @@ public final class ReaGhidraBridge extends HeadlessScript {
                 result.addProperty(request.inputAddress, success);
         }
         return result;
+    }
+
+    private Address requireMappedAddress(JsonObject params) {
+        requireDocument(params);
+        Address address = requireAddress(params, "address");
+        if (!currentProgram.getMemory().contains(address))
+            throw new RequestFailure("invalid_request", "Address is not mapped: " + canonicalAddress(address));
+        return address;
+    }
+
+    private JsonElement readListingComment(JsonObject params, CommentType type) {
+        requireKeys(params, Set.of("document", "address"));
+        Address address = requireMappedAddress(params);
+        return GSON.toJsonTree(currentProgram.getListing().getComment(type, address));
+    }
+
+    // Commit only verified metadata edits. Cancellation and failed readback roll back.
+    private JsonElement editAnalystMetadata(String label, java.util.concurrent.Callable<Boolean> edit)
+            throws Exception {
+        int transaction = currentProgram.startTransaction(label);
+        boolean commit = false;
+        try {
+            boolean matched = edit.call();
+            monitor.checkCancelled();
+            commit = matched;
+            return GSON.toJsonTree(matched);
+        }
+        finally {
+            currentProgram.endTransaction(transaction, commit);
+            invalidateAnalysisCaches();
+        }
+    }
+
+    private JsonElement setListingComment(JsonObject params, CommentType type) throws Exception {
+        requireKeys(params, Set.of("document", "address", "comment"));
+        Address address = requireMappedAddress(params);
+        String text = requireText(params, "comment");
+        validateAnnotationText(text, "comment");
+        String expected = text.isEmpty() ? null : text;
+        return editAnalystMetadata("REA listing comment", () -> {
+            currentProgram.getListing().setComment(address, type, expected);
+            return java.util.Objects.equals(expected, currentProgram.getListing().getComment(type, address));
+        });
+    }
+
+    private static String analystBookmarkName(Bookmark bookmark) {
+        String name = bookmark.getComment();
+        return name == null || name.isEmpty() ? null : name;
+    }
+
+    private JsonArray listAnalystBookmarks(JsonObject params) throws Exception {
+        requireKeys(params, Set.of("document"));
+        requireDocument(params);
+        List<Bookmark> bookmarks = new ArrayList<>();
+        Iterator<Bookmark> iterator = currentProgram.getBookmarkManager().getBookmarksIterator(BookmarkType.NOTE);
+        while (iterator.hasNext()) {
+            monitor.checkCancelled();
+            Bookmark bookmark = iterator.next();
+            if (ANALYST_BOOKMARK_CATEGORY.equals(bookmark.getCategory())) bookmarks.add(bookmark);
+        }
+        bookmarks.sort(Comparator.comparing(Bookmark::getAddress));
+        JsonArray result = new JsonArray();
+        for (Bookmark bookmark : bookmarks) {
+            monitor.checkCancelled();
+            JsonObject row = new JsonObject();
+            row.addProperty("address", canonicalAddress(bookmark.getAddress()));
+            row.addProperty("name", analystBookmarkName(bookmark));
+            result.add(row);
+        }
+        return result;
+    }
+
+    private JsonElement setAnalystBookmark(JsonObject params) throws Exception {
+        requireKeys(params, params.has("name")
+            ? Set.of("document", "address", "name") : Set.of("document", "address"));
+        Address address = requireMappedAddress(params);
+        BookmarkManager manager = currentProgram.getBookmarkManager();
+        Bookmark previous = manager.getBookmark(address, BookmarkType.NOTE, ANALYST_BOOKMARK_CATEGORY);
+        String name = params.has("name") ? requireText(params, "name") : previous == null ? "" : previous.getComment();
+        if (name == null) name = "";
+        validateAnnotationText(name, "name");
+        String expected = name.isEmpty() ? null : name;
+        String text = name;
+        return editAnalystMetadata("REA analyst bookmark", () -> {
+            manager.setBookmark(address, BookmarkType.NOTE, ANALYST_BOOKMARK_CATEGORY, text);
+            Bookmark observed = manager.getBookmark(address, BookmarkType.NOTE, ANALYST_BOOKMARK_CATEGORY);
+            return observed != null && java.util.Objects.equals(expected, analystBookmarkName(observed));
+        });
+    }
+
+    private JsonElement unsetAnalystBookmark(JsonObject params) throws Exception {
+        requireKeys(params, Set.of("document", "address"));
+        requireDocument(params);
+        Address address = requireAddress(params, "address");
+        BookmarkManager manager = currentProgram.getBookmarkManager();
+        Bookmark previous = manager.getBookmark(address, BookmarkType.NOTE, ANALYST_BOOKMARK_CATEGORY);
+        // Permit removing an existing orphan; a new unmapped location is invalid.
+        if (previous == null) {
+            requireMappedAddress(params);
+            return GSON.toJsonTree(true);
+        }
+        return editAnalystMetadata("REA remove analyst bookmark", () -> {
+            manager.removeBookmark(previous);
+            return manager.getBookmark(address, BookmarkType.NOTE, ANALYST_BOOKMARK_CATEGORY) == null;
+        });
     }
 
     private JsonArray listDocuments(JsonObject params) {

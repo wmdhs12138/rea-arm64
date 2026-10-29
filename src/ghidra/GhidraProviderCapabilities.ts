@@ -85,6 +85,21 @@ export const limitationsFor = (operation: string): readonly string[] => {
         "set_addresses_names applies each address in its own transaction and reports per-address success; invalid names, unmapped addresses, and readback mismatches roll back only that address.",
         "Metadata edits invalidate immutable analysis snapshots and are discarded on close; this is not a saved Ghidra project.",
       ];
+    case "comment":
+    case "inline_comment":
+    case "set_comment":
+    case "set_inline_comment":
+      return [
+        ...common,
+        "Ghidra requires an explicit mapped address; PRE and EOL listing comments represent regular and inline comments. Empty writes clear the comment. Writes use a transaction and exact readback, invalidate analysis snapshots, and are discarded on close.",
+      ];
+    case "list_bookmarks":
+    case "set_bookmark":
+    case "unset_bookmark":
+      return [
+        ...common,
+        "Ghidra exposes only analyst Note bookmarks in the REA category. Analysis warnings and bookmarks in other categories are not listed or modified. Names are stored in the bookmark comment; an empty name reads as null. An omitted name preserves an existing name. These ephemeral metadata edits do not move a GUI cursor or change executable bytes.",
+      ];
     case "inspect_native_load_image":
       return [
         ...common,
@@ -105,6 +120,7 @@ export const limitationsFor = (operation: string): readonly string[] => {
         ...common,
         "Offsets come from Ghidra source-byte mappings, not virtual-address arithmetic. Uninitialized memory, missing mappings and ambiguous mappings fail explicitly.",
       ];
+    case "current_document":
     case "list_documents":
       return [
         ...common,
@@ -199,7 +215,8 @@ export const CAPABILITIES: readonly CapabilityDescriptor[] = Object.freeze(
       // Project writes are private import machinery. Analysis reads are bound
       // to the artifact/profile; session annotations disable snapshot replay.
       ...(GHIDRA_MUTATING_OPERATIONS.has(operation) ||
-      operation === "list_documents"
+      operation === "list_documents" ||
+      operation === "current_document"
         ? {}
         : { cachePolicy: "snapshot" as const }),
       effects: Object.freeze({
