@@ -103,6 +103,7 @@ Python 环境需要 `pwntools==4.15.0`、`pyelftools==0.33`、`unicorn==2.1.2`�
 ```sh
 export REA_PWNTOOLS_PYTHON=/absolute/path/to/python
 python3 scripts/verify-arm64-layout.py
+node scripts/verify-arm64-catalog.mjs
 
 # 提供含 rea_layout_probe 函数的自有 ELF，并配置 Ghidra/JDK：
 node scripts/verify-ghidra-metadata.mjs /absolute/path/to/probe.elf rea_layout_probe
@@ -116,6 +117,8 @@ ELF 验证器从仓库的 C 源码生成 10 个大、小端样本，不执行目
 （另 1 项按原条件跳过），以及 231 个 Ghidra 适配器/会话/缓存测试。
 真实 Ghidra MCP 验证还通过 37 次调用，覆盖注释和书签回读、拒绝路径、缓存刷新、
 关闭重开后丢弃元数据及原文件 SHA-256 不变。标准 Turbo 构建流程也已在本机跑通。
+compact/full 两套 MCP 目录均验证了 229 个工具、ARM64 描述、AArch64 输出 Schema
+和延迟加载后的运行时目录身份一致。
 这些结果不代表 229 个工具逐一执行过。
 [ARM64 CI](.github/workflows/arm64.yml) 使用 GitHub 的原生 ARM64 runner，
 自动编译源码、生成目录并运行相关回归和真实 ELF 验证。

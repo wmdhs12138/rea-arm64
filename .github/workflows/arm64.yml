@@ -34,6 +34,8 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
       - name: Build runtime and regenerate verified MCP catalogs
         run: npm run compile
+      - name: Verify both public MCP catalogs and deferred runtime identity
+        run: node scripts/verify-arm64-catalog.mjs
       - name: Run format, schema, metadata, compiler and ownership regressions
         run: |
           node node_modules/vitest/vitest.mjs run \
