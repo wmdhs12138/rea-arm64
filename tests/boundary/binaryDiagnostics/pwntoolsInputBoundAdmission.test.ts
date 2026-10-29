@@ -1,3 +1,4 @@
+import { pwntoolsHostSupported } from "../../../src/native/pwntools/PwntoolsDecoder.js";
 import { open } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -8,7 +9,7 @@ import { projectAnalysisError } from "../../../src/domain/analysisErrorProjectio
 import { spawnOwnedProviderProcess } from "../../../src/process/ProviderProcess.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 
-const unsupportedHost = process.platform !== "linux" || process.arch !== "x64";
+const unsupportedHost = !pwntoolsHostSupported(process.platform, process.arch);
 const DEFAULT_INPUT_BYTES = 33_554_432;
 // One byte above the shipped bound, so the admission decision is the only
 // difference between the first two cases.

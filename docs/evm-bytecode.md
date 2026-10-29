@@ -17,7 +17,7 @@ rea inspect-evm-interface ./runtime.bin raw --json
 }
 ```
 
-Initial real verification covers flat legacy bytecode on Linux x64 and unchanged
+Real verification covers flat legacy bytecode on Linux x64 and ARM64 and unchanged
 bundled EVMole 0.9.3. EOF-style EF00 containers return `unsupported_target`,
 with the selected path and format reason. Selected-path resolution errors
 `ENOENT`, `ENOTDIR`, `ELOOP`, and `ENAMETOOLONG` are `invalid_request` path

@@ -64,13 +64,13 @@ import {
 import { pwntoolsInputBytes } from "./PwntoolsInputLimit.js";
 
 const HOST_REQUIREMENT =
-  "The initial real-verified pwntools artifact profile supports Linux x64 only.";
+  "The pwntools artifact profile supports Linux x64 and ARM64.";
 
-/** The pwntools profile runs only on Linux x64; discovery and execution share this check. */
+/** The pwntools profile runs on Linux x64 and ARM64; discovery and execution share this check. */
 export const pwntoolsHostSupported = (
   platform: NodeJS.Platform,
   arch: string,
-): boolean => platform === "linux" && arch === "x64";
+): boolean => platform === "linux" && (arch === "x64" || arch === "arm64");
 
 /** Owned launcher seam shared by the offline pwntools artifact adapters. */
 export type PwntoolsLauncher = NonNullable<

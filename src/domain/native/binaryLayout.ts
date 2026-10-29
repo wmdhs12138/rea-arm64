@@ -40,6 +40,11 @@ const binaryLayoutObjectSchema = z.strictObject({
       byte_order: z.literal("little"),
     }),
     z.strictObject({
+      machine: z.literal("EM_AARCH64"),
+      bits: z.literal(64),
+      byte_order: z.enum(["little", "big"]),
+    }),
+    z.strictObject({
       machine: z.enum(["EM_386", "EM_ARM"]),
       bits: z.literal(32),
       byte_order: z.literal("little"),

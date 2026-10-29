@@ -30,13 +30,13 @@ import { RECOVERY_LIMITS, wakaruFixedLimitRecovery } from "./WakaruRelease.js";
 
 const OPERATION = "recover_javascript_sources";
 const WAKARU_REQUIREMENT =
-  "Provide an absolute REA_WAKARU_COMMAND pointing to a Wakaru ^1.13.0 Linux x64 binary (verified with 1.14.0); no tool is installed by REA. See docs/javascript-recovery.md#install-wakaru.";
+  "Provide an absolute REA_WAKARU_COMMAND pointing to a Wakaru ^1.13.0 native Linux x64 or ARM64 binary (verified with 1.14.0); no tool is installed by REA. See docs/javascript-recovery.md#install-wakaru.";
 
-/** Wakaru recovery runs only on Linux x64; discovery and execution share this check. */
+/** Wakaru recovery runs on Linux x64 and ARM64; discovery and execution share this check. */
 export const wakaruHostSupported = (
   platform: NodeJS.Platform,
   arch: string,
-): boolean => platform === "linux" && arch === "x64";
+): boolean => platform === "linux" && (arch === "x64" || arch === "arm64");
 
 /** Inject the owned process launcher while retaining production protocol parsing. */
 export type WakaruLauncher = (

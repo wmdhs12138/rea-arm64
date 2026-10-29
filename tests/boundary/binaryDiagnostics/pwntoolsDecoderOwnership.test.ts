@@ -1,3 +1,4 @@
+import { pwntoolsHostSupported } from "../../../src/native/pwntools/PwntoolsDecoder.js";
 import { EventEmitter } from "node:events";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -13,7 +14,7 @@ import {
 // Exercise the decoder's launch/cleanup contract independently of the host's
 // process table. The interpreter has exec'd over its caller-selected wrapper.
 it
-  .runIf(process.platform === "linux" && process.arch === "x64")
+  .runIf(pwntoolsHostSupported(process.platform, process.arch))
   .each(["owned", "wrong-token", "wrong-parent"] as const)(
   "cancels an exec wrapper only with current ownership: %s",
   async (identity) => {

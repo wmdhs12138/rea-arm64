@@ -1,3 +1,4 @@
+import { pwntoolsHostSupported } from "../../../src/native/pwntools/PwntoolsDecoder.js";
 import type { AnalysisError } from "../../../src/domain/analysisErrorBase.js";
 import type { RecordedCrash } from "../../../src/domain/native/recordedCrash.js";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
@@ -35,7 +36,7 @@ const requestSchema = z.object({
   snapshot_path: z.string(),
   reply_path: z.string(),
 });
-const host = process.platform === "linux" && process.arch === "x64";
+const host = pwntoolsHostSupported(process.platform, process.arch);
 
 const withCleanupGate = (
   launched: SpawnedOwnedProviderProcess,

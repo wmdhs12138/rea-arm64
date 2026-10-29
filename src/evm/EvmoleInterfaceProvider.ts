@@ -74,13 +74,13 @@ import {
 
 const OPERATION = "inspect_evm_interface";
 const HOST_REQUIREMENT =
-  "Initial real-verified offline EVM interface profile supports Linux x64 only.";
+  "The offline EVM interface profile supports Linux x64 and ARM64.";
 
-/** The EVM interface profile runs only on Linux x64; discovery and execution share this check. */
+/** The EVM interface profile runs on Linux x64 and ARM64; discovery and execution share this check. */
 export const evmHostSupported = (
   platform: NodeJS.Platform,
   arch: string,
-): boolean => platform === "linux" && arch === "x64";
+): boolean => platform === "linux" && (arch === "x64" || arch === "arm64");
 export const EVM_PRLIMIT_COMMAND_DEFAULT = "/usr/bin/prlimit";
 
 export interface EvmLimiterProbeFileSystem {

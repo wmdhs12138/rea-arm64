@@ -1,3 +1,4 @@
+import { pwntoolsHostSupported } from "../../../src/native/pwntools/PwntoolsDecoder.js";
 import {
   createTestWorkspace,
   removeTestWorkspace,
@@ -15,7 +16,7 @@ import { cleanupOwnedProcessGroup } from "../../../src/process/ProcessOwnership.
 import { binaryLayoutFixture } from "../../fixtures/binaryDiagnostics/layout.js";
 import { projectAnalysisError } from "../../../src/domain/analysisErrorProjection.js";
 
-const unsupportedHost = process.platform !== "linux" || process.arch !== "x64";
+const unsupportedHost = !pwntoolsHostSupported(process.platform, process.arch);
 const requestSchema = z.strictObject({
   snapshot_path: z.string(),
   reply_path: z.string(),

@@ -11,12 +11,13 @@ import {
   binaryLayoutSchema,
 } from "../../domain/native/binaryLayout.js";
 import { analysisInputErrorFromIssues } from "../../domain/inputIssueProjection.js";
-import { err, ok, type Result } from "../../domain/result.js";
+import { err, type Result } from "../../domain/result.js";
 import { completeProviderEvidence } from "../ProviderOperationExecution.js";
 
 const OPERATION = "inspect_binary_layout";
 const EVIDENCE_ARCHITECTURES = {
   EM_X86_64: "x86_64",
+  EM_AARCH64: "arm64",
   EM_386: "x86",
   EM_ARM: "arm",
   EM_MIPS: "mips",

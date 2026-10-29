@@ -7,7 +7,7 @@ never executes the selected or recovered application code.
 
 ## Caller-supplied engine
 
-REA accepts Wakaru **^1.13.0** on Linux x64. The report parser is verified with
+REA accepts Wakaru **^1.13.0** on Linux x64 or ARM64. The report parser is verified with
 Wakaru **1.14.0**. Another release in that range is accepted, the observed
 version is reported, and a limitation records that the parser was not verified
 against that release. Wakaru changes `--version`, `--json` and `provenance.json`
@@ -28,6 +28,11 @@ The audited source revision is distinct from `executed_source_revision: null`:
 a version string cannot prove which source produced a caller-supplied binary.
 
 ### Install Wakaru
+
+For Linux ARM64, use the official `wakaru-linux-arm64.tar.gz` release asset
+and set `REA_WAKARU_COMMAND` to its extracted native binary. The ARM64 1.14.0
+binary SHA-256 is `a07c4acb087d6e8be265f9c32a11c0979230545f947de79ba057f4d3c57b7824`.
+The x64 commands and digest below apply to x64 only.
 
 Use the official release binary, the same one CI verifies:
 

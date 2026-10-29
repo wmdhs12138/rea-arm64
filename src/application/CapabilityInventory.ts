@@ -497,14 +497,14 @@ const workflowAvailabilityFor = ({
       policy,
       "javascriptRecovery",
       policy.javascriptRecoveryEnabled,
-      "On Linux x64, provide an absolute REA_WAKARU_COMMAND for Wakaru ^1.13.0 (verified with 1.14.0) and util-linux prlimit; see docs/javascript-recovery.md#install-wakaru. No binary target is required.",
+      "On Linux x64 or ARM64, provide an absolute REA_WAKARU_COMMAND for Wakaru ^1.13.0 (verified with 1.14.0) and util-linux prlimit; see docs/javascript-recovery.md#install-wakaru. No binary target is required.",
     );
   if (name === "inspect_binary_layout")
     return hostRestrictedAvailability(
       policy,
       "binaryLayout",
       policy.binaryLayoutEnabled,
-      "On Linux x64, set absolute REA_PWNTOOLS_PYTHON to caller-supplied Python with pwntools 4.15.0. No active binary target is required.",
+      "On Linux x64 or ARM64, set absolute REA_PWNTOOLS_PYTHON to caller-supplied Python with pwntools 4.15.0. No active binary target is required.",
     );
   if (name === "inspect_packet_capture" || name === "inspect_packet_fields")
     return hostRestrictedAvailability(
@@ -544,7 +544,7 @@ const workflowAvailabilityFor = ({
       policy,
       "evmInterface",
       policy.evmInterfaceEnabled,
-      "The bundled offline EVM interface profile is currently real-verified on Linux x64. No active binary target or chain endpoint is required.",
+      "The bundled offline EVM interface profile is verified on Linux x64 and ARM64. No active binary target or chain endpoint is required.",
     );
     if (profile.reason !== "available") return profile;
     const limiter = policy.evmLimiterAvailability;
@@ -557,7 +557,7 @@ const workflowAvailabilityFor = ({
       policy,
       "recordedCrash",
       policy.recordedCrashEnabled,
-      "On Linux x64, set absolute REA_PWNTOOLS_PYTHON to caller-supplied Python with pwntools 4.15.0. No active binary target is required.",
+      "On Linux x64 or ARM64, set absolute REA_PWNTOOLS_PYTHON to caller-supplied Python with pwntools 4.15.0. No active binary target is required.",
     );
   if (kind === "firmware-provider") {
     const { binwalk, unblob } = FIRMWARE_TOOL_REQUIREMENTS;
