@@ -1,3 +1,7 @@
+> **ARM64 çatalı:** Bu depo, yukarı akış REA 6.8.0 üzerine Linux ARM64 uyumluluk değişikliklerini sürdürür.
+> `arm64` dalını kullanın ve [ARM64 kurulumu, doğrulama ve kalan sınırlamalar](../../README.arm64.zh-CN.md) belgesini izleyin.
+> Aşağıdaki yukarı akış README dosyasında bağlantısı verilen npm paketi bu çatalın değişikliklerini içermez.
+
 <div align="center">
 
 [English](../../README.md) · [简体中文](README_zh.md) · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · [한국어](README_ko.md) · **Türkçe** · [Русский](README_ru.md) · [Tiếng Việt](README_vi.md) · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · [Polski](README_pl.md) · [Português (Brasil)](README_pt-BR.md) · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md)

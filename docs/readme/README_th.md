@@ -1,3 +1,7 @@
+> **ฟอร์ก ARM64:** คลังนี้ดูแลการเปลี่ยนแปลงเพื่อรองรับ Linux ARM64 โดยต่อยอดจาก REA 6.8.0 ต้นทาง
+> ให้ใช้แบรนช์ `arm64` และทำตาม[การติดตั้ง การตรวจสอบ และข้อจำกัดที่เหลืออยู่บน ARM64](../../README.arm64.zh-CN.md)
+> แพ็กเกจ npm ที่ลิงก์ไว้ใน README ต้นทางด้านล่างไม่มีการเปลี่ยนแปลงของฟอร์กนี้
+
 <div align="center">
 
 [English](../../README.md) · [简体中文](README_zh.md) · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · [한국어](README_ko.md) · [Türkçe](README_tr.md) · [Русский](README_ru.md) · [Tiếng Việt](README_vi.md) · **ไทย** · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · [Polski](README_pl.md) · [Português (Brasil)](README_pt-BR.md) · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md)

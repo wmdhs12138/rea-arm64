@@ -1,3 +1,7 @@
+> **ARM64 포크:** 이 저장소는 업스트림 REA 6.8.0 위에 Linux ARM64 호환성 변경을 유지합니다.
+> `arm64` 브랜치를 사용하고 [ARM64 설치, 검증 및 남은 제한 사항](../../README.arm64.zh-CN.md)을 따르세요.
+> 아래 업스트림 README에 링크된 npm 패키지에는 이 포크의 변경 사항이 포함되어 있지 않습니다.
+
 <div align="center">
 
 [English](../../README.md) · [简体中文](README_zh.md) · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · **한국어** · [Türkçe](README_tr.md) · [Русский](README_ru.md) · [Tiếng Việt](README_vi.md) · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · [Polski](README_pl.md) · [Português (Brasil)](README_pt-BR.md) · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md)

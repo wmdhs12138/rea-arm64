@@ -1,3 +1,7 @@
+> **Fork para ARM64:** Este repositório mantém mudanças de compatibilidade com Linux ARM64 sobre o REA 6.8.0 original.
+> Use a branch `arm64` e siga [instalação, verificação e limitações restantes no ARM64](../../README.arm64.zh-CN.md).
+> O pacote npm vinculado no README original abaixo não contém as mudanças deste fork.
+
 <div align="center">
 
 [English](../../README.md) · [简体中文](README_zh.md) · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · [한국어](README_ko.md) · [Türkçe](README_tr.md) · [Русский](README_ru.md) · [Tiếng Việt](README_vi.md) · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · [Polski](README_pl.md) · **Português (Brasil)** · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md)

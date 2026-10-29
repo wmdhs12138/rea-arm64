@@ -1,3 +1,7 @@
+> **ARM64 フォーク：** このリポジトリは、上流の REA 6.8.0 に Linux ARM64 対応の変更を加えて保守しています。
+> `arm64` ブランチを使用し、[ARM64 のインストール、検証、残る制限](../../README.arm64.zh-CN.md)に従ってください。
+> 以下の上流 README にリンクされた npm パッケージには、このフォークの変更は含まれていません。
+
 <div align="center">
 
 [English](../../README.md) · [简体中文](README_zh.md) · [繁體中文](README_zh-TW.md) · **日本語** · [한국어](README_ko.md) · [Türkçe](README_tr.md) · [Русский](README_ru.md) · [Tiếng Việt](README_vi.md) · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · [Polski](README_pl.md) · [Português (Brasil)](README_pt-BR.md) · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md)

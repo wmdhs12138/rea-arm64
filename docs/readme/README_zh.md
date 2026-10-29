@@ -1,3 +1,7 @@
+> **ARM64 分叉版：** 本仓库在上游 REA 6.8.0 之上维护 Linux ARM64 兼容性改动。
+> 请使用 `arm64` 分支，并参阅[ARM64 安装、验证与剩余限制](../../README.arm64.zh-CN.md)。
+> 下方上游 README 链接的 npm 包不包含本分叉版的改动。
+
 <div align="center">
 
 [English](../../README.md) · **简体中文** · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · [한국어](README_ko.md) · [Türkçe](README_tr.md) · [Русский](README_ru.md) · [Tiếng Việt](README_vi.md) · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · [Polski](README_pl.md) · [Português (Brasil)](README_pt-BR.md) · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md)
