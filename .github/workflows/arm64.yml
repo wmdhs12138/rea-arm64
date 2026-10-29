@@ -1,0 +1,63 @@
+name: ARM64 compatibility
+
+on:
+  push:
+    branches: [arm64]
+  pull_request:
+    branches: [arm64]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    env:
+      HUSKY: "0"
+      REA_TYPESCRIPT_PACKAGE: typescript6
+      NODE_OPTIONS: --max-old-space-size=3072
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install locked development dependencies
+        run: |
+          npm install --global npm@11.16.0
+          npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build runtime and regenerate verified MCP catalogs
+        run: npm run compile
+      - name: Run format, schema, metadata, compiler and ownership regressions
+        run: |
+          node node_modules/vitest/vitest.mjs run \
+            src/domain/native/binaryLayout.test.ts \
+            src/application/binaryDiagnostics/BinaryLayoutService.test.ts \
+            src/ghidra/GhidraInventoryValues.test.ts \
+            src/ghidra/GhidraSessionValues.test.ts \
+            tests/boundary/filesystem/typescriptCompiler.test.ts \
+            tests/boundary/binaryDiagnostics/pwntoolsLayoutProvider.test.ts \
+            tests/boundary/binaryDiagnostics/pwntoolsInputBoundAdmission.test.ts \
+            tests/boundary/binaryDiagnostics/pwntoolsDecoderOwnership.test.ts \
+            tests/boundary/binaryDiagnostics/recordedCrashProvider.test.ts \
+            --maxWorkers=2
+      - name: Prepare pinned Python artifact decoder
+        run: |
+          python3 -m venv .cache/arm64-python
+          .cache/arm64-python/bin/python -m pip install pwntools==4.15.0 pyelftools==0.33 unicorn==2.1.2
+          echo "REA_PWNTOOLS_PYTHON=$PWD/.cache/arm64-python/bin/python" >> "$GITHUB_ENV"
+      - name: Compare real AArch64 ELF observations with binutils
+        run: python3 scripts/verify-arm64-layout.py
+      - name: Retain owned-fixture verification records
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: arm64-elf-verification
+          path: .cache/arm64-verification/
+          if-no-files-found: ignore

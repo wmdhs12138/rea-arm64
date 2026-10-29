@@ -79,6 +79,7 @@
     "scripts/prepare.mjs",
     "skills",
     "README.md",
+    "README.arm64.zh-CN.md",
     "DISCLAIMER.md",
     "THIRD_PARTY_NOTICES.md",
     "LICENSE",

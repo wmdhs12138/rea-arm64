@@ -44,6 +44,16 @@ cleanup, and delivery headroom in the outer MCP client deadline.
 
 Earlier verification used JEB 5.48.0 (Linux x64, licensed build) serving `jeb-mcp-server` 1.3.0 over streamable HTTP. The official Linux x64 CE build `5.48.0.202610071539` was also verified through real CLI and production stdio MCP native-code workflows; see the [Linux CE audit](https://github.com/morluto/rea/blob/42e1a17d6e6c0487f17be0bae248553c4caba7f7/experiments/analysis-efficiency/jeb-linux-native.md) for measurements and limits. CE verification does not establish licensed/Demo Android decompilation or GUI behavior.
 
+## Linux ARM64 verification
+
+The official CE `5.48.0.202610071539` was activated and launched on Linux ARM64
+with JDK 21. Real REA CLI calls returned the client version and enumerated the
+ELF and ARM64 code units. An ARM64 method-decompilation request returned
+`unsupported_target` because the engine reported no available decompiler.
+This is CE module coverage, not an ARM64 host launch failure. The headless catalog
+omits `open_project`; select input at startup. GUI project opening and licensed
+ARM/Android decompilation were not verified by this run.
+
 ## Operations
 
 | MCP tool / CLI command                      | Purpose                                                                                                                         |
